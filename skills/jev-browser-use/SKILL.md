@@ -1,21 +1,21 @@
 ---
 name: jev-browser-use
-description: Fast browser actions with TypeSafe Jev. Codex handles planning, text input, visual interpretation, and verification; Jev handles navigation, clicks, toggles, and scrolling through the existing Computer Use runtime. Claude Code installation is supported; browser integration is coming soon.
+description: Fast browser actions with TypeSafe Jev. Codex or Claude Code handles planning, text input, visual interpretation, and verification; Jev handles bounded browser actions through an existing authorized session.
 ---
 
 # Jev browser operations
 
 Installable through `npx skills add` in Codex, Claude Code, and other compatible
-Skill hosts. Browser execution is currently validated only in Codex with the
-required Computer Use runtime. Claude Code browser integration is coming soon;
-installation alone does not provide it. If the runtime is absent, report that
-requirement instead of substituting unrelated browser tools.
+Skill hosts. Codex uses its Computer Use runtime directly. On Windows, Claude
+Code uses `claude-mcp-server.mjs` with DeliciousBuding/codex-browser-bridge.
+Both routes execute the same loop in `bridge.mjs`; no second browser driver or
+second Jev decision loop is created.
 
 Use this as the default first route for browser verification. Run the decision/action loop inside `cua_repl` so the host model does not spend a turn on each click. This is a browser-plugin bridge, not a standalone browser driver or a replacement for Codex's judgment.
 
 ## Responsibilities and limits
 
-- Codex owns the task, authorization, all text entry, graphical recognition, visual interpretation, sensitive actions, and final verification. Jev is a fast mechanical browser operator: it chooses among currently observed permitted navigation, click, toggle, scroll, reload, and bounded key actions. It never chats, types or writes content, recognizes screenshots, generates selectors, code, coordinates, URLs, or arbitrary text.
+- The host agent owns the task, authorization, all text entry, graphical recognition, visual interpretation, sensitive actions, and final verification. Jev is a fast mechanical browser operator: it chooses among currently observed permitted navigation, click, toggle, scroll, reload, and bounded key actions. It never chats, types or writes content, recognizes screenshots, generates selectors, code, coordinates, URLs, or arbitrary text.
 - Use only the in-app browser or Google Chrome; never Edge. Follow the current browser tool's first-call rules and documentation. Use `cua_repl` for every UI action. Do not launch a separate Playwright/CDP driver.
 - The helper supports named clicks, bounded scrolling, safe navigation keys, reloads, persistent multi-chunk sessions, and deterministic state waits. Scrolling can target the page, a freshly resolved named AX container, or a coordinate supplied once by Codex after visual recognition; Jev never invents coordinates. The helper deliberately exposes no text-entry action. Codex enters text and then resumes the same Jev session. Native select APIs, frames, canvas, drag-and-drop, uploads, screenshots as model input, and native desktop apps are not implemented in the helper. Use Codex's CUA tools for those gaps and resume Jev rather than abandoning delegation.
 - Jev returns `needs_verification`, never a verified pass. Codex must independently check the requested result using fresh browser state and screenshots when appropriate. A successful scroll may leave AX text unchanged; the helper records `effectNeedsVisualVerification` and continues instead of falsely declaring no progress.
@@ -26,7 +26,16 @@ The intended scale boundary is action-heavy browser work. Keep navigation, expan
 
 Call `loadConfig()` and pass its result unchanged into `createSession()` or `run()` as shown below. The helper owns authentication, API requests, and response validation. Browser tasks must not select a provider, override the configured model, write their own API client, or change credential configuration unless the user requests that change.
 
-The user configuration works across project directories. The helper reads the credential from its configured local file; do not print credentials, dotenv contents, or raw HTTP error bodies, and do not put them in pages or traces. A missing credential is a configuration problem: do not search unrelated files or silently switch providers.
+The user configuration works across project directories. The helper first reads the selected process environment variable (`TYPESAFE_API_KEY` or `OPENROUTER_API_KEY`) and retains `envFile` as a compatibility fallback. Do not print credentials, dotenv contents, or raw HTTP error bodies, and do not put them in pages or traces. A missing credential is a configuration problem: do not search unrelated files or silently switch providers.
+
+## Claude Code transport
+
+Claude Code must register `claude-mcp-server.mjs` as an MCP stdio command and
+set `CODEX_BROWSER_BRIDGE_COMMAND` when the bridge executable is not on PATH.
+The wrapper exposes only tab listing, tab claiming, and a bounded Jev run. It
+does not expose typing, cookies, arbitrary JavaScript, uploads, or the rest of
+the underlying bridge surface. Consequential control names and submit-like key
+actions are handed back to Claude. See README for the configuration example.
 
 Only for installation, provider changes, or API troubleshooting, read [API integration maintenance](references/provider-configuration.md). It documents all currently supported adapters. It is not required reading for browser verification.
 
@@ -75,9 +84,9 @@ plugin is missing. Do not repeatedly search that list or stop on that basis.
 The Skill is independent of the current project directory. Import the absolute
 Skill path and call `loadConfig()`; it reads `~/.config/jev-browser-use/config.json`
 from the user home directory, independent of the install path or working directory. `loadConfig()`
-returns `envFile`, `provider`, and `model`, **not an API key**. The absence of `config.apiKey`
+returns credential routing, `provider`, and `model`, **not an API key**. The absence of `config.apiKey`
 is expected and must not be reported as missing credentials. Only `decide()`
-reads the referenced dotenv credential when making the authorized API request.
+reads the process environment or configured compatibility file only when making the authorized API request.
 
 ### Copyable first probe
 

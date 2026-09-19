@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { parseEnv } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,6 +16,32 @@ const safeKeys = new Set(['Enter','Escape','Tab','Shift+Tab','PageUp','PageDown'
 
 function parseState(state) {
   return state.split('\n').map(line => line.trim()).map(line => line.match(/^(\d+) (text field|text area|combo box|radio button|menu item|[\w]+)(?: \([^)]*\))? (?:Description: )?(.*)$/)).filter(Boolean).map(match => ({index:Number(match[1]),role:match[2],name:match[3]}));
+}
+
+function compactState(snapshot,goal,limit=24000) {
+  if (snapshot.length <= limit) return snapshot;
+  const lines=snapshot.split('\n');
+  const selected=new Set([0]);
+  const terms=(goal.toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) ?? []).filter(term=>!['the','and','for','with','without','currently','open','visible','stop','host','verification','performing','action'].includes(term));
+  for (let index=0;index<lines.length;index++) {
+    if (/^\s*\d+ (?:text field|text area|combo box|radio button|menu item|[\w]+)(?: \([^)]*\))? (?:Description: )?/.test(lines[index])) selected.add(index);
+    if (terms.some(term=>lines[index].toLowerCase().includes(term))) for (let offset=-2;offset<=2;offset++) if (lines[index+offset] !== undefined) selected.add(index+offset);
+  }
+  const output=['[AX snapshot compacted: goal context and controls retained]'];
+  for (const index of [...selected].sort((a,b)=>a-b)) {
+    const candidate=lines[index];
+    if (output.join('\n').length+candidate.length+1 > limit) break;
+    output.push(candidate);
+  }
+  for (const candidate of lines) {
+    if (output.join('\n').length+candidate.length+1 > limit) break;
+    if (!output.includes(candidate)) output.push(candidate);
+  }
+  return output.join('\n');
+}
+
+async function readState(tab,goal) {
+  return compactState(await tab.getAXState({emit:false,disableDiffing:true}),goal);
 }
 
 function controlNames(control) {
@@ -44,7 +69,7 @@ function checkState(snapshot, allowedOrigins) {
   let origin;
   try { origin = new URL(url).origin; } catch { throw new Error('Cannot verify browser origin'); }
   if (!allowedOrigins.includes(origin)) throw new Error('Browser left authorized origins');
-  if (snapshot.length > 24000) throw new Error('Snapshot too large; narrow the task');
+  if (snapshot.length > 24000) throw new Error('Snapshot compaction failed');
 }
 
 function validateControl(control) {
@@ -68,8 +93,15 @@ export async function decide({envFile,provider='typesafe',model,goal,state,actio
   const route = providers[provider];
   model ??= route.model;
   if (typeof model !== 'string' || !route.modelPattern.test(model)) throw new Error('Invalid Jev model');
-  const env = envFile ? parseEnv(await readFile(envFile,'utf8')) : {};
-  const key = env[route.keyName] ?? env[route.keyName.toLowerCase()];
+  // Prefer the host process environment. Keep envFile as a compatibility fallback
+  // for existing cross-platform installations; neither source is ever logged.
+  const runtimeEnv = globalThis.process?.env ?? {};
+  let key = runtimeEnv[route.keyName] ?? runtimeEnv[route.keyName.toLowerCase()];
+  if (!key && envFile) {
+    const { parseEnv } = await import('node:util');
+    const env = parseEnv(await readFile(envFile,'utf8'));
+    key = env[route.keyName] ?? env[route.keyName.toLowerCase()];
+  }
   if (!key) throw new Error(`${route.keyName} is missing`);
   const criteria = Object.fromEntries(actions.map((action,index) => [`a${index}`,action.description]));
   criteria.DONE = 'Goal fully achieved; stop for independent Codex verification';
@@ -168,7 +200,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
   const startedAt = performance.now();
   let waits = 0;
   let decisionRetries = 0;
-  let state = await tab.getAXState({emit:false,disableDiffing:true});
+  let state = await readState(tab,goal);
   for (let step=0;step<maxSteps;step++) {
     checkState(state,allowedOrigins);
     if (performance.now()-startedAt > maxMs) return result('budget',history,state,startedAt);
@@ -186,7 +218,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
       history.push({provider:provider ?? 'typesafe',choice:'ERROR',confidence:null,model:model ?? null,apiMs:Math.round(performance.now()-decisionStartedAt),action:'Decision request',executed:false,reason:canRetry ? 'decision_retry' : 'decision_error'});
       if (canRetry) {
         decisionRetries += 1;
-        state = await tab.getAXState({emit:false,disableDiffing:true});
+        state = await readState(tab,goal);
         checkState(state,allowedOrigins);
         step -= 1;
         continue;
@@ -195,7 +227,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
     }
     decisionRetries = 0;
     const record = {provider:decision.provider,choice:decision.choice,confidence:decision.confidence,model:decision.model,apiMs:decision.apiMs,action:decision.action?.description ?? decision.choice};
-    const fresh = await tab.getAXState({emit:false,disableDiffing:true});
+    const fresh = await readState(tab,goal);
     checkState(fresh,allowedOrigins);
     if (performance.now()-startedAt >= maxMs) return result('budget',history,fresh,startedAt);
     if (fresh !== state) { history.push({...record,executed:false,reason:'stale_state'}); state=fresh; continue; }
@@ -206,7 +238,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
       const remaining = maxMs-(performance.now()-startedAt);
       if (remaining <= 0) return result('budget',history,state,startedAt);
       await new Promise(resolve => setTimeout(resolve,Math.min(waitPollMs,remaining)));
-      state = await tab.getAXState({emit:false,disableDiffing:true});
+      state = await readState(tab,goal);
       continue;
     }
     waits = 0;
@@ -219,7 +251,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
       return result('action_error',history,state,startedAt,{error:error instanceof Error ? error.message : 'Action failed'});
     }
     history.push({...record,executed:true});
-    const next = await tab.getAXState({emit:false,disableDiffing:true});
+    const next = await readState(tab,goal);
     checkState(next,allowedOrigins);
     if (next === state) {
       if (decision.action.op === 'scroll') history[history.length-1].effectNeedsVisualVerification = true;
@@ -256,7 +288,7 @@ export async function waitForState(tab,{allowedOrigins,includes=[],excludes=[],t
   const startedAt = performance.now();
   let state = '';
   while (performance.now()-startedAt < timeoutMs) {
-    state = await tab.getAXState({emit:false,disableDiffing:true});
+    state = compactState(await tab.getAXState({emit:false,disableDiffing:true}),[...includes,...excludes].join(' '));
     checkState(state,allowedOrigins);
     if (includes.every(value => state.includes(value)) && excludes.every(value => !state.includes(value))) return {status:'matched',state,elapsedMs:Math.round(performance.now()-startedAt)};
     const remaining = timeoutMs-(performance.now()-startedAt);

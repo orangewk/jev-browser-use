@@ -1,8 +1,8 @@
 # Jev Browser Use
 
-**Jev clicks. Codex thinks and verifies.**
+**Jev clicks. Codex or Claude Code thinks and verifies.**
 
-A browser Skill powered by [TypeSafe’s Jev](https://docs.typesafe.ai/introduction). Hand off navigation, clicks, toggles, and scrolling; keep Codex in charge of text input, visual judgment, and the final check.
+A browser Skill powered by [TypeSafe’s Jev](https://docs.typesafe.ai/introduction). Hand off navigation, clicks, toggles, and scrolling; keep the host agent in charge of text input, visual judgment, and the final check.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -64,7 +64,26 @@ Choose an agent, or install directly into Claude Code:
 npx skills add wy-coliney/jev-browser-use -g -a claude-code -y
 ```
 
-**Claude Code browser support is coming soon.** The Skill can be installed now; browser execution currently requires the Codex Computer Use runtime.
+Claude Code can use the same Jev loop through the DeliciousBuding/codex-browser-bridge transport. Install that bridge separately, then register the included bounded wrapper as an MCP server:
+
+```json
+{
+  "mcpServers": {
+    "jev-browser": {
+      "command": "node",
+      "args": ["C:/absolute/path/to/jev-browser-use/claude-mcp-server.mjs"],
+      "env": { "CODEX_BROWSER_BRIDGE_COMMAND": "C:/absolute/path/to/codex-browser-bridge.cmd" }
+    }
+  }
+}
+```
+
+The wrapper accepts an already-authorized ChatGPT desktop browser session and exposes only tab listing, tab claiming, and bounded Jev runs. Text entry, arbitrary JavaScript, cookies, uploads, and consequential actions remain outside the wrapper.
+
+The runtime prefers the provider credential from its process environment. A
+sandboxed Computer Use runtime may not expose process variables; in that case an
+existing `envFile` can be configured as a compatibility fallback. The installer
+never creates a credential copy silently.
 
 </details>
 
@@ -98,7 +117,7 @@ Use Jev Browser Use to help prepare a post in my open Chrome tab.
 Use the draft and image I provide. Check both, then stop before publishing.
 ```
 
-Jev handles the controls. Codex enters text, handles images, and checks the outcome. When a step needs help, Codex takes over and Jev resumes afterward.
+Jev handles the controls. Codex or Claude Code enters text, handles images, and checks the outcome. When a step needs help, the host takes over and Jev resumes afterward.
 
 ## How it works
 
