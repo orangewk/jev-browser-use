@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createSession, availableActions, discoverActions, run } from '../skills/jev-browser-use/bridge.mjs';
 import { createClaudeCodeSession } from '../skills/jev-browser-use/claude-adapter.mjs';
 import { handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
+import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/start-windows-profile.mjs';
 
 const state = (url = 'https://chatgpt.com/') => `Browser tab: Chat URL: "${url}".\n0 button Description: Next`;
 function transport(states = [state()]) {
@@ -66,6 +67,33 @@ async function testClaudeBoundary() {
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'like it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'Like'}]},callTool,{}),/Unsafe Claude browser control/);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary]]) {
+async function testHostBrowserPolicy() {
+  const calls=[];
+  const callTool=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://x.com/home'}]};
+    if(name==='codex_user_tabs') return {content:[{type:'text',text:JSON.stringify([
+      {id:'9',url:'https://x.com/home',title:'X'},
+      {id:'10',url:'https://mail.google.com/mail/u/0/',title:'Mail'}
+    ])}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  const config={browser:{allowedOrigins:['https://x.com'],allowedActors:['claude']}};
+  await handleJevTool('jev_claim_tab',{tab_id:'9'},callTool,config,{JEV_BROWSER_ACTOR:'claude'});
+  assert.deepEqual(calls.map(([name])=>name),['codex_claim_tab','codex_get_url']);
+  const tabs=await handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'claude'});
+  assert.deepEqual(tabs,[{id:'9',url:'https://x.com/home',title:'X'}]);
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',allowed_origins:['https://mail.google.com']},callTool,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
+  await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'unknown'}),/actor is not authorized/);
+}
+
+async function testWindowsProfilePaths() {
+  const env={PROGRAMFILES:'C:\\Program Files',LOCALAPPDATA:'C:\\Users\\me\\AppData\\Local'};
+  assert.equal(chromeCandidates(env)[0],'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
+  assert.equal(profileDirectory(env),'C:\\Users\\me\\AppData\\Local\\JevBrowser\\User Data');
+  assert.equal(profileDirectory({...env,JEV_BROWSER_PROFILE_DIR:'D:\\Browser'}),'D:\\Browser');
+}
+
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['windows profile paths',testWindowsProfilePaths]]) {
   await fn(); console.log(`PASS ${name}`);
 }

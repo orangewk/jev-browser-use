@@ -80,6 +80,37 @@ Claude Code can use the same Jev loop through the DeliciousBuding/codex-browser-
 
 The wrapper accepts an already-authorized ChatGPT desktop browser session and exposes only tab listing, tab claiming, and bounded Jev runs. Text entry, arbitrary JavaScript, cookies, uploads, and consequential actions remain outside the wrapper.
 
+On Windows, start a separate local Chrome state for agent browsing:
+
+```powershell
+node C:\absolute\path\to\jev-browser-use\skills\jev-browser-use\start-windows-profile.mjs
+```
+
+In that Chrome window, install the ChatGPT browser extension through **ChatGPT
+Desktop → Settings → Computer use**, allow only the sites you intend to use,
+and sign in yourself. Keep the extension disabled in personal profiles if this
+profile is the agent boundary. The launcher stores browser state under
+`%LOCALAPPDATA%\JevBrowser\User Data`; it does not copy cookies or enable a
+remote-debugging port.
+
+Host policy can narrow the wrapper further in the shared Jev config:
+
+```json
+{
+  "provider": "typesafe",
+  "model": "jev-latest",
+  "browser": {
+    "allowedOrigins": ["https://x.com"],
+    "allowedActors": ["codex", "claude", "shii"]
+  }
+}
+```
+
+Set `JEV_BROWSER_ACTOR` in each MCP registration. These actor labels provide
+policy and audit attribution for trusted local hosts; they are not a sandbox
+against a malicious local process. Do not run two agent tasks against the same
+browser at once.
+
 The runtime prefers the provider credential from its process environment. A
 sandboxed Computer Use runtime may not expose process variables; in that case an
 existing `envFile` can be configured as a compatibility fallback. The installer

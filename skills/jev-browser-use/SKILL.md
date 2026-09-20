@@ -37,6 +37,13 @@ does not expose typing, cookies, arbitrary JavaScript, uploads, or the rest of
 the underlying bridge surface. Consequential control names and submit-like key
 actions are handed back to Claude. See README for the configuration example.
 
+On Windows, use `start-windows-profile.mjs` to launch the dedicated local
+`Jev Browser` Chrome state. Install and enable the ChatGPT browser extension
+only in that browser profile, and restrict its site permissions to the sites
+the user approved. The launcher does not enable remote debugging, copy cookies,
+install extensions, or perform login. The user performs login, 2FA, and CAPTCHA.
+Do not operate the same browser concurrently from multiple agent tasks.
+
 Only for installation, provider changes, or API troubleshooting, read [API integration maintenance](references/provider-configuration.md). It documents all currently supported adapters. It is not required reading for browser verification.
 
 ## Discover the browser tool correctly — required before declaring it unavailable
