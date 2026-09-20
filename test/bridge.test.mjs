@@ -79,6 +79,29 @@ async function testClaudeBoundary() {
   assert.deepEqual(calls.map(([name])=>name),['codex_user_tabs','codex_claim_tab']);
   assert.deepEqual(calls[1][1],{tab_id:'9'});
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'like it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'Like'}]},callTool,{}),/Unsafe Claude browser control/);
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'post it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'ポストする'}]},callTool,{}),/Unsafe Claude browser control/);
+}
+
+async function testLocalizedConsequentialDiscovery() {
+  const old=process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret';
+  const oldFetch=globalThis.fetch;
+  const calls=[];
+  globalThis.fetch=async(_url,options)=>{
+    const criteria=JSON.parse(options.body).questions.next.criteria;
+    assert.deepEqual(Object.keys(criteria).sort(),['BLOCKED','DONE','WAIT']);
+    return new Response(JSON.stringify({model:'jev-latest',answers:{next:{type:'choice',choice:'DONE',confidence:1,probabilities:{DONE:1,BLOCKED:0,WAIT:0}}}}),{status:200});
+  };
+  const callTool=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://x.com/home'}]};
+    if(name==='codex_dom_snapshot') return {content:[{type:'text',text:JSON.stringify({nodes:[{role:{value:'button'},name:{value:'ポストする'},backendDOMNodeId:42}]})}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  try {
+    const out=await handleJevTool('jev_browser_run',{tab_id:'9',goal:'read posts',allowed_origins:['https://x.com'],policy:{click:true},max_steps:1},callTool,{browser:{allowedOrigins:['https://x.com'],allowedActors:['shii']}},{JEV_BROWSER_ACTOR:'shii'});
+    assert.equal(out.status,'needs_verification');
+    assert.equal(calls.some(([name])=>name==='codex_cua_click'),false);
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
 }
 
 async function testHostBrowserPolicy() {
@@ -150,6 +173,6 @@ async function testClaudePipeRecovery() {
   assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }
