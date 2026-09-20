@@ -6,7 +6,7 @@ import { loadConfig } from './bridge.mjs';
 
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
 const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const CONSEQUENTIAL = /(?:\b(?:publish|post|send|reply|repost|retweet|quote|like|unlike|bookmark|follow|unfollow|subscribe|purchase|buy|pay|delete|remove|logout|log out|sign out|save|submit|confirm|create|update|edit|password|account|block|unblock|mute|unmute|report)\b|投稿|ポスト|送信|返信|リプライ|リポスト|再投稿|引用|いいね|ブックマーク|フォロー|購読|購入|支払|削除|取り消し|ログアウト|保存|確認|作成|更新|編集|パスワード|アカウント|ブロック|ミュート|報告)/i;
+const CONSEQUENTIAL = /(?:\b(?:publish|post|send|reply|repost|retweet|quote|like|unlike|bookmark|follow|unfollow|subscribe|purchase|buy|pay|delete|remove|login|log in|sign in|logout|log out|sign out|verify|verification|2fa|two-factor|captcha|authorize|authorization|save|submit|confirm|create|update|edit|password|account|block|unblock|mute|unmute|report|dm|direct message)\b|投稿|ポスト|送信|返信|リプライ|リポスト|再投稿|引用|いいね|ブックマーク|フォロー|購読|購入|支払|削除|取り消し|ログイン|サインイン|ログアウト|認証|二要素|二段階|2段階|確認コード|キャプチャ|保存|確認|作成|更新|編集|パスワード|アカウント|ブロック|ミュート|報告|ダイレクトメッセージ)/i;
 const WRAPPER_KEYS = new Set(['PageUp','PageDown']);
 const tools = [
   {name:'jev_user_tabs',description:'List existing browser tabs available to claim.',inputSchema:{type:'object',properties:{}}},

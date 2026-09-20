@@ -104,6 +104,16 @@ async function testLocalizedConsequentialDiscovery() {
   } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
 }
 
+async function testAuthenticationAndMessagingControls() {
+  const controls=['Log in','Verify with 2FA','Send direct message','ログイン','二段階認証','ダイレクトメッセージ'].map(name=>({op:'click',name}));
+  for (const control of controls) {
+    await assert.rejects(
+      ()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',allowed_origins:['https://x.com'],controls:[control],max_steps:1},async()=>{}, {browser:{allowedOrigins:['https://x.com'],allowedActors:['shii']}},{JEV_BROWSER_ACTOR:'shii'}),
+      /Unsafe Claude browser control/,
+    );
+  }
+}
+
 async function testHostBrowserPolicy() {
   const calls=[];
   const callTool=async(name,args)=>{
@@ -173,6 +183,6 @@ async function testClaudePipeRecovery() {
   assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }
