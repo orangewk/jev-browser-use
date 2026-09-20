@@ -7,7 +7,7 @@ import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/st
 const state = (url = 'https://chatgpt.com/') => `Browser tab: Chat URL: "${url}".\n0 button Description: Next`;
 function transport(states = [state()]) {
   let reads = 0; const calls = [];
-  return { calls, getAXState: async () => states[Math.min(reads++, states.length - 1)], click: async (i) => calls.push(['click', i]), scroll: async (...a) => calls.push(['scroll', ...a]), pressKey: async (k) => calls.push(['pressKey', k]), reload: async () => calls.push(['reload']) };
+  return { calls, getAXState: async () => states[Math.min(reads++, states.length - 1)], click: async (i) => calls.push(['click', i]), scroll: async (...a) => calls.push(['scroll', ...a]), pressKey: async (...a) => calls.push(['pressKey', ...a]), reload: async () => calls.push(['reload']) };
 }
 function claudeTransport(url='https://chatgpt.com/') {
   const calls=[];
@@ -39,6 +39,20 @@ async function testSharedLoop() {
 async function testStaleState() {
   const old = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret'; const oldFetch=globalThis.fetch; globalThis.fetch=async()=>response('a0');
   try { const t=transport([state(), state('https://chatgpt.com/?fresh=1')]); const out=await run(t,{goal:'x',controls:[{op:'click',name:'Next'}],provider:'typesafe',allowedOrigins:['https://chatgpt.com'],maxSteps:1}); assert.equal(out.history[0].reason,'stale_state'); assert.equal(t.calls.length,0); } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
+}
+
+async function testPageScrollContract() {
+  const old=process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret'; const oldFetch=globalThis.fetch; globalThis.fetch=async()=>response('a0');
+  try {
+    const codex=transport();
+    const a=await run(codex,{goal:'scroll',policy:{scrollDirections:['down']},provider:'typesafe',allowedOrigins:['https://chatgpt.com'],maxSteps:1});
+    assert.equal(a.history[0].executed,true);
+    assert.deepEqual(codex.calls,[['pressKey',null,'PageDown']]);
+    const claude=claudeTransport();
+    const b=await createClaudeCodeSession({tabId:'7',callTool:claude.callTool},{provider:'typesafe',allowedOrigins:['https://chatgpt.com'],maxSteps:1}).run({goal:'scroll',policy:{scrollDirections:['down']}});
+    assert.equal(b.history[0].executed,true);
+    assert.deepEqual(claude.calls.find(([name])=>name==='codex_cua_keypress')?.[1]?.keys,['PageDown']);
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
 }
 
 async function testLargeSnapshotCompaction() {
@@ -94,6 +108,6 @@ async function testWindowsProfilePaths() {
   assert.equal(profileDirectory({...env,JEV_BROWSER_PROFILE_DIR:'D:\\Browser'}),'D:\\Browser');
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['windows profile paths',testWindowsProfilePaths]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['windows profile paths',testWindowsProfilePaths]]) {
   await fn(); console.log(`PASS ${name}`);
 }

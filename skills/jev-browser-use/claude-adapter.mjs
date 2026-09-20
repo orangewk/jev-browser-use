@@ -46,7 +46,7 @@ export function createClaudeCodeTab({tabId,callTool}) {
       const key = direction === 'down' ? 'PageDown' : 'PageUp';
       for (let i=0;i<amount;i++) await call('codex_cua_keypress',{keys:[key]});
     },
-    pressKey: key => call('codex_cua_keypress',{keys:[key]}),
+    pressKey: (_target,key) => call('codex_cua_keypress',{keys:[key]}),
     reload: () => call('codex_reload')
   });
 }
