@@ -1,22 +1,42 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createClaudeCodeSession } from './claude-adapter.mjs';
 import { loadConfig } from './bridge.mjs';
 
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
+const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CONSEQUENTIAL = /\b(publish|send|like|follow|subscribe|purchase|buy|pay|delete|remove|logout|log out|sign out|save|submit|confirm|create|update|edit|password|account)\b/i;
-const WRAPPER_KEYS = new Set(['Escape','PageUp','PageDown','Home','End']);
+const WRAPPER_KEYS = new Set(['PageUp','PageDown']);
 const tools = [
   {name:'jev_user_tabs',description:'List existing browser tabs available to claim.',inputSchema:{type:'object',properties:{}}},
   {name:'jev_claim_tab',description:'Claim one existing browser tab for bounded Jev operation.',inputSchema:{type:'object',properties:{tab_id:{type:'string'}},required:['tab_id']}},
   {name:'jev_browser_run',description:'Run the shared bounded Jev browser loop on a claimed tab. Text entry and consequential actions are not exposed.',inputSchema:{type:'object',properties:{tab_id:{type:'string'},goal:{type:'string'},allowed_origins:{type:'array',items:{type:'string'}},controls:{type:'array'},policy:{type:'object'},max_steps:{type:'integer',minimum:1,maximum:30},min_confidence:{type:'number',minimum:0.55,maximum:1}},required:['tab_id','goal','allowed_origins']}}
 ];
 
+export function browserBridgeArgs(command,runDoctor=spawnSync) {
+  const args=['--mode','mcp','--profile','basic'];
+  try {
+    const doctor=runDoctor(command,['--mode','doctor'],{
+      encoding:'utf8',
+      windowsHide:true,
+      timeout:15000,
+      shell:process.platform === 'win32' && /\.cmd$/i.test(command)
+    });
+    if (doctor.status !== 0) return args;
+    const report=JSON.parse(doctor.stdout);
+    const pipe=report?.pipes
+      ?.filter(candidate=>candidate?.connected === true && SAFE_PIPE.test(candidate.name ?? ''))
+      .sort((a,b)=>(a.latency_ms ?? Number.MAX_SAFE_INTEGER)-(b.latency_ms ?? Number.MAX_SAFE_INTEGER))[0]?.name;
+    if (pipe) args.push('--pipe',pipe);
+  } catch {}
+  return args;
+}
+
 class BrowserMcpClient {
   constructor(command=process.env.CODEX_BROWSER_BRIDGE_COMMAND || 'codex-browser-bridge') {
     if (!SAFE_COMMAND.test(command)) throw new Error('Invalid CODEX_BROWSER_BRIDGE_COMMAND');
-    this.child = spawn(command,['--mode','mcp','--profile','basic'],{stdio:['pipe','pipe','inherit'],shell:process.platform === 'win32' && /\.cmd$/i.test(command)});
+    this.child = spawn(command,browserBridgeArgs(command),{stdio:['pipe','pipe','inherit'],shell:process.platform === 'win32' && /\.cmd$/i.test(command)});
     this.pending = new Map();
     this.nextId = 1;
     createInterface({input:this.child.stdout}).on('line',line => {
@@ -133,7 +153,11 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
   const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
   const session=createClaudeCodeSession({tabId,callTool},{...config,allowedOrigins,maxSteps:args.max_steps ?? 10,minConfidence:args.min_confidence ?? 0.55});
-  return {...await session.run({goal,controls,policy}),actor};
+  try {
+    return {...await session.run({goal,controls,policy}),actor};
+  } finally {
+    try { await callTool('codex_finalize',{}); } catch {}
+  }
 }
 
 function content(value) { return {content:[{type:'text',text:typeof value === 'string' ? value : JSON.stringify(value)}]}; }
@@ -162,6 +186,7 @@ async function main() {
       process.stdout.write(`${JSON.stringify({jsonrpc:'2.0',id:request.id,result:{content:[{type:'text',text:'Jev browser request failed'}],isError:true}})}\n`);
     }
   });
+  input.on('close',() => browser?.close());
   process.on('exit',() => browser?.close());
 }
 

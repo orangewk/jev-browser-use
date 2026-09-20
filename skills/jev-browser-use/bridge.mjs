@@ -65,11 +65,20 @@ function matchesPattern(name, pattern) {
 }
 
 function checkState(snapshot, allowedOrigins) {
-  const url = snapshot.match(/^Browser tab:.* URL: "([^"]+)"\./m)?.[1];
+  const url = stateUrl(snapshot);
   let origin;
   try { origin = new URL(url).origin; } catch { throw new Error('Cannot verify browser origin'); }
   if (!allowedOrigins.includes(origin)) throw new Error('Browser left authorized origins');
   if (snapshot.length > 24000) throw new Error('Snapshot compaction failed');
+}
+
+function stateUrl(snapshot) {
+  return snapshot.match(/^Browser tab:.* URL: "([^"]+)"\./m)?.[1];
+}
+
+function safeToExecuteAfterRefresh(before,after,action) {
+  if (before === after) return true;
+  return action?.op === 'scroll' && action.target === undefined && stateUrl(before) === stateUrl(after);
 }
 
 function validateControl(control) {
@@ -230,7 +239,7 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
     const fresh = await readState(tab,goal);
     checkState(fresh,allowedOrigins);
     if (performance.now()-startedAt >= maxMs) return result('budget',history,fresh,startedAt);
-    if (fresh !== state) { history.push({...record,executed:false,reason:'stale_state'}); state=fresh; continue; }
+    if (!safeToExecuteAfterRefresh(state,fresh,decision.action)) { history.push({...record,executed:false,reason:'stale_state'}); state=fresh; continue; }
     if (decision.confidence < minConfidence) return result('low_confidence',[...history,record],state,startedAt);
     if (decision.choice === 'WAIT') {
       history.push({...record,executed:false,reason:'wait'});

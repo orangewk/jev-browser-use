@@ -28,6 +28,12 @@ export function createClaudeCodeTab({tabId,callTool}) {
   if (typeof tabId !== 'string' || !tabId || typeof callTool !== 'function') throw new Error('Claude browser transport requires tabId and callTool');
   let nodeIds = [];
   const call = async (name,args={}) => textFrom(await callTool(name,{tab_id:tabId,...args}));
+  const pageScroll = direction => call('codex_cua_scroll',{
+    x:500,
+    y:500,
+    scroll_x:0,
+    scroll_y:direction === 'down' ? 600 : -600
+  });
   return Object.freeze({
     async getAXState() {
       const [url,raw] = await Promise.all([call('codex_get_url'),call('codex_dom_snapshot')]);
@@ -43,10 +49,12 @@ export function createClaudeCodeTab({tabId,callTool}) {
     },
     async scroll(target,direction,amount=1) {
       if (target !== undefined) throw new Error('Claude browser targeted scroll requires host handback');
-      const key = direction === 'down' ? 'PageDown' : 'PageUp';
-      for (let i=0;i<amount;i++) await call('codex_cua_keypress',{keys:[key]});
+      for (let i=0;i<amount;i++) await pageScroll(direction);
     },
-    pressKey: (_target,key) => call('codex_cua_keypress',{keys:[key]}),
+    pressKey: (_target,key) => {
+      if (!['PageDown','PageUp'].includes(key)) throw new Error('Claude browser key requires host handback');
+      return pageScroll(key === 'PageDown' ? 'down' : 'up');
+    },
     reload: () => call('codex_reload')
   });
 }

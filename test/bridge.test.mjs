@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createSession, availableActions, discoverActions, run } from '../skills/jev-browser-use/bridge.mjs';
 import { createClaudeCodeSession } from '../skills/jev-browser-use/claude-adapter.mjs';
-import { handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
+import { browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
 import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/start-windows-profile.mjs';
 
 const state = (url = 'https://chatgpt.com/') => `Browser tab: Chat URL: "${url}".\n0 button Description: Next`;
@@ -51,7 +51,7 @@ async function testPageScrollContract() {
     const claude=claudeTransport();
     const b=await createClaudeCodeSession({tabId:'7',callTool:claude.callTool},{provider:'typesafe',allowedOrigins:['https://chatgpt.com'],maxSteps:1}).run({goal:'scroll',policy:{scrollDirections:['down']}});
     assert.equal(b.history[0].executed,true);
-    assert.deepEqual(claude.calls.find(([name])=>name==='codex_cua_keypress')?.[1]?.keys,['PageDown']);
+    assert.deepEqual(claude.calls.find(([name])=>name==='codex_cua_scroll')?.[1],{tab_id:'7',x:500,y:500,scroll_x:0,scroll_y:600});
   } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
 }
 
@@ -101,6 +101,34 @@ async function testHostBrowserPolicy() {
   await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'unknown'}),/actor is not authorized/);
 }
 
+async function testDynamicPageScroll() {
+  const old = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret'; const oldFetch=globalThis.fetch; globalThis.fetch=async()=>response('a0');
+  try {
+    const first=`${state()}\nDynamic item A`;
+    const refreshed=`${state()}\nDynamic item B`;
+    const t=transport([first,refreshed,refreshed]);
+    const out=await run(t,{goal:'scroll once',controls:[{op:'scroll',direction:'down'}],provider:'typesafe',allowedOrigins:['https://chatgpt.com'],maxSteps:1});
+    assert.equal(out.history[0].executed,true);
+    assert.deepEqual(t.calls,[['pressKey',null,'PageDown']]);
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
+}
+
+async function testClaudeFinalizesRun() {
+  const old=process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret';
+  const oldFetch=globalThis.fetch; globalThis.fetch=async()=>response();
+  const calls=[];
+  const callTool=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://x.com/home'}]};
+    if(name==='codex_dom_snapshot') return {content:[{type:'text',text:JSON.stringify({nodes:[]})}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  try {
+    await handleJevTool('jev_browser_run',{tab_id:'9',goal:'stop',allowed_origins:['https://x.com'],max_steps:1},callTool,{browser:{allowedOrigins:['https://x.com'],allowedActors:['claude']}},{JEV_BROWSER_ACTOR:'claude'});
+    assert.equal(calls.at(-1)[0],'codex_finalize');
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
+}
+
 async function testWindowsProfilePaths() {
   const env={PROGRAMFILES:'C:\\Program Files',LOCALAPPDATA:'C:\\Users\\me\\AppData\\Local'};
   assert.equal(chromeCandidates(env)[0],'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
@@ -108,6 +136,20 @@ async function testWindowsProfilePaths() {
   assert.equal(profileDirectory({...env,JEV_BROWSER_PROFILE_DIR:'D:\\Browser'}),'D:\\Browser');
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['windows profile paths',testWindowsProfilePaths]]) {
+async function testClaudePipeRecovery() {
+  const healthy='codex-browser-use\\13dec2d3-c5bb-44c8-b2c1-5f73825c7d5e';
+  const args=browserBridgeArgs('bridge.exe',()=>({
+    status:0,
+    stdout:JSON.stringify({pipes:[
+      {name:'codex-browser-use-deadbeef-dead-beef-dead-beefdeadbeef',connected:false,latency_ms:null},
+      {name:healthy,connected:true,latency_ms:2}
+    ]})
+  }));
+  assert.deepEqual(args,['--mode','mcp','--profile','basic','--pipe',healthy]);
+  assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:1,stdout:''})),['--mode','mcp','--profile','basic']);
+  assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
+}
+
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }
