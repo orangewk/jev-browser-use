@@ -16,7 +16,7 @@ const tools = [
 class BrowserMcpClient {
   constructor(command=process.env.CODEX_BROWSER_BRIDGE_COMMAND || 'codex-browser-bridge') {
     if (!SAFE_COMMAND.test(command)) throw new Error('Invalid CODEX_BROWSER_BRIDGE_COMMAND');
-    this.child = spawn(command,['--mode','mcp','--profile','basic'],{stdio:['pipe','pipe','inherit'],shell:process.platform === 'win32'});
+    this.child = spawn(command,['--mode','mcp','--profile','basic'],{stdio:['pipe','pipe','inherit'],shell:process.platform === 'win32' && /\.cmd$/i.test(command)});
     this.pending = new Map();
     this.nextId = 1;
     createInterface({input:this.child.stdout}).on('line',line => {
