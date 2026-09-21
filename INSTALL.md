@@ -17,14 +17,14 @@ For the standard Skill installer, use:
 npx skills add wy-coliney/jev-browser-use --skill jev-browser-use -g -a codex -y
 ```
 
-Use `-a claude-code` only when the user requests Claude Code. Installation is supported, but Claude browser execution is not yet integrated. Omit `-g` for a requested project-local installation. Then help configure the provider using the [configuration guide](skills/jev-browser-use/references/provider-configuration.md), preserving any existing settings. This CLI installs files, not API credentials or browser permissions.
+Use `-a claude-code` only when the user requests Claude Code. Claude execution uses the included bounded MCP wrapper with DeliciousBuding/codex-browser-bridge and the same Jev loop; installing this Skill does not install that bridge or change Claude MCP settings. Omit `-g` for a requested project-local installation. Then configure the provider using the [configuration guide](skills/jev-browser-use/references/provider-configuration.md), preserving existing settings. This CLI installs files, not API credentials or browser permissions.
 
 For manual installation and guided API setup:
 
 1. Check Node.js 22+ and Git are available.
 2. Clone `https://github.com/wy-coliney/jev-browser-use.git` into a new temporary directory.
 3. From that checkout, run `node scripts/install.mjs --no-config`. This installs to `~/.agents/skills/jev-browser-use` without interactive prompts or changing existing settings.
-4. If `~/.config/jev-browser-use/config.json` already exists, preserve it. Otherwise, ask which provider the user wants (`typesafe` or `openrouter`) and the absolute path to their local credential dotenv file. Never ask for a key in chat or print the file.
+4. If `~/.config/jev-browser-use/config.json` already exists, preserve it. Otherwise, ask which provider the user wants (`typesafe` or `openrouter`). The credential source is the existing Windows User environment variable (`TYPESAFE_API_KEY` or `OPENROUTER_API_KEY`); never ask for, persist, or print a key.
 5. Configure using the installer's exported function, run from the checkout with `node --input-type=module`:
 
 ```js
@@ -33,14 +33,13 @@ await install({
   config: {
     provider: 'typesafe',
     model: 'jev-latest',
-    envFile: '/absolute/path/to/existing/credentials.env',
   },
 });
 ```
 
 Use the user's chosen settings; OpenRouter's default model is `~typesafe/jev-latest`. Pass paths safely, not as unescaped shell substitutions. See [provider configuration](skills/jev-browser-use/references/provider-configuration.md) for credential variable names. If API access is not ready, finish installing and report configuration as pending.
 
-Confirm the installed `SKILL.md` and `bridge.mjs` match `skills/jev-browser-use/` in the checkout, then remove only the temporary directory you created. Report installation and configuration status separately; no paid API test is needed.
+Confirm the installed `SKILL.md`, `bridge.mjs`, and Claude adapter files match `skills/jev-browser-use/` in the checkout. Report installation and configuration status separately; no paid API test is needed.
 
 The user needs Computer Use MCP and Chrome or Codex's in-app browser. This installer does not set up the browser plugin. Start a new Codex task after installation; restart Codex if the Skill is not discovered. For browser capability checks, follow the installed Skill's direct `mcp__cua_repl` probe.
 

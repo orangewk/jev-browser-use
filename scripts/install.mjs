@@ -7,7 +7,7 @@ import { createInterface } from 'node:readline/promises';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const models = { typesafe: 'jev-latest', openrouter: '~typesafe/jev-latest' };
-const runtimeFiles = ['SKILL.md', 'bridge.mjs', 'references'];
+const runtimeFiles = ['SKILL.md', 'bridge.mjs', 'claude-adapter.mjs', 'claude-mcp-server.mjs', 'start-windows-profile.mjs', 'references'];
 
 async function exists(path) {
   try { await stat(path); return true; } catch (error) {
@@ -31,9 +31,7 @@ export async function install({ source = sourceRoot, home = homedir(), config } 
     if (!Object.hasOwn(models, config.provider)) throw new Error('Choose typesafe or openrouter.');
     const pattern = config.provider === 'typesafe' ? /^jev-[a-z0-9.-]{1,80}$/ : /^(?:~?typesafe\/)?jev-[a-z0-9.-]{1,80}$/;
     if (typeof config.model !== 'string' || !pattern.test(config.model)) throw new Error('Enter a valid Jev model ID.');
-    if (!isAbsolute(config.envFile ?? '') || !(await exists(config.envFile)) || !(await stat(config.envFile)).isFile()) {
-      throw new Error('Provide an absolute path to an existing dotenv file.');
-    }
+    if (config.envFile !== undefined && (!isAbsolute(config.envFile) || !(await exists(config.envFile)) || !(await stat(config.envFile)).isFile())) throw new Error('envFile must be an absolute existing file when provided.');
   }
   // Validate the complete source before touching an installed skill.
   const skillSource = join(source, 'skills', 'jev-browser-use');
@@ -44,7 +42,7 @@ export async function install({ source = sourceRoot, home = homedir(), config } 
   await cp(join(source, 'LICENSE'), join(target, 'LICENSE'));
   if (config && !preserveConfig) {
     await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
-    await writeFile(configPath, JSON.stringify({ provider: config.provider, model: config.model, envFile: config.envFile }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    await writeFile(configPath, JSON.stringify({ provider: config.provider, model: config.model, ...(config.envFile ? { envFile: config.envFile } : {}) }, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   }
   return { target, configPath, configured: preserveConfig || Boolean(config) };
 }
@@ -65,8 +63,8 @@ async function main() {
       const provider = (await prompts.question('Jev provider (typesafe / openrouter): ')).trim();
       if (!Object.hasOwn(models, provider)) throw new Error('Choose typesafe or openrouter.');
       const model = (await prompts.question(`Model [${models[provider]}]: `)).trim() || models[provider];
-      const envFile = (await prompts.question('Absolute path to your existing dotenv file (not the API key): ')).trim();
-      config = { provider, model, envFile };
+      const envFile = (await prompts.question('Optional absolute dotenv path (leave blank to use process environment): ')).trim();
+      config = { provider, model, ...(envFile ? { envFile } : {}) };
     } finally { prompts.close(); }
   }
   const result = await install({ config });

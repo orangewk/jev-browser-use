@@ -8,11 +8,11 @@ The installer chooses a supported adapter. The skill does not prefer one provide
 
 Create `~/.config/jev-browser-use/config.json`. It contains only:
 
-- `envFile`: absolute path to a local dotenv file holding the selected provider credential.
 - `provider`: a supported adapter ID.
 - `model`: the Jev model identifier accepted by that adapter.
+- optional `envFile`: compatibility source for sandboxed hosts that do not expose process environment variables.
 
-Credentials must remain in the referenced dotenv file and must never be copied into `config.json`, the Skill directory, browser pages, logs, or traces.
+Credentials normally come from the host process environment and must never be copied into `config.json`, the Skill directory, browser pages, logs, or traces. Existing `envFile` configuration remains a compatibility fallback when the process variable is absent. Some sandboxed Computer Use runtimes require that fallback; do not silently create a credential copy.
 
 ## Supported adapters
 
@@ -20,7 +20,6 @@ Credentials must remain in the referenced dotenv file and must never be copied i
 
 ```json
 {
-  "envFile": "/absolute/path/to/your/credentials.env",
   "provider": "typesafe",
   "model": "jev-latest"
 }
@@ -32,7 +31,6 @@ The adapter reads `TYPESAFE_API_KEY` and uses the fixed TypeSafe SystemOne endpo
 
 ```json
 {
-  "envFile": "/absolute/path/to/your/credentials.env",
   "provider": "openrouter",
   "model": "~typesafe/jev-latest"
 }
@@ -45,7 +43,7 @@ The adapter reads `OPENROUTER_API_KEY` (lowercase `openrouter_api_key` is also a
 - Both adapters use Bearer authentication, reject redirects, validate the returned choice schema, confidence, probabilities, and model identity, and keep credentials out of the decision body.
 - A transport failure may be retried once within the same bounded run using the same adapter and model. Authentication, schema, and quota failures are not retried.
 - Missing credentials are configuration errors. Do not search unrelated files or silently switch adapters.
-- Browser tasks should spread `loadConfig()` into `createSession()` or `run()` unchanged. Provider changes belong to installation or maintenance, not task execution.
+- Browser tasks should spread `loadConfig()` into `createSession()` or `run()` unchanged. Provider changes belong to installation or maintenance, not task execution. Missing credentials fail explicitly and safely.
 
 ## References
 
