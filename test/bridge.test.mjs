@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createSession, availableActions, discoverActions, run } from '../skills/jev-browser-use/bridge.mjs';
 import { createClaudeCodeSession } from '../skills/jev-browser-use/claude-adapter.mjs';
-import { browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
+import { BrowserMcpClient, browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
 import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/start-windows-profile.mjs';
 
 const state = (url = 'https://chatgpt.com/') => `Browser tab: Chat URL: "${url}".\n0 button Description: Next`;
@@ -107,13 +107,24 @@ async function testLocalizedConsequentialDiscovery() {
 }
 
 async function testAuthenticationAndMessagingControls() {
-  const controls=['Log in','Verify with 2FA','Send direct message','ログイン','二段階認証','ダイレクトメッセージ'].map(name=>({op:'click',name}));
+  const controls=['Log in','Verify with 2FA','Send direct message','Vote','Agree','Accept','Join','ログイン','二段階認証','ダイレクトメッセージ','投票','同意','承諾','参加'].map(name=>({op:'click',name}));
+  controls.push({op:'click',name:'Next',aliases:['Post']});
   for (const control of controls) {
     await assert.rejects(
       ()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',allowed_origins:['https://x.com'],controls:[control],max_steps:1},async()=>{}, {browser:{allowedOrigins:['https://x.com'],allowedActors:['shii']}},{JEV_BROWSER_ACTOR:'shii'}),
       /Unsafe Claude browser control/,
     );
   }
+}
+
+async function testClaudeRequestTimeout() {
+  const client=Object.create(BrowserMcpClient.prototype);
+  client.child={stdin:{write(){}}};
+  client.pending=new Map();
+  client.nextId=1;
+  client.requestTimeoutMs=5;
+  await assert.rejects(()=>client.request('tools/list',{}),/timed out/);
+  assert.equal(client.pending.size,0);
 }
 
 async function testHostBrowserPolicy() {
@@ -196,6 +207,6 @@ async function testClaudePipeRecovery() {
   assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['claude request timeout',testClaudeRequestTimeout],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }

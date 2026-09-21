@@ -6,7 +6,8 @@ import { loadConfig } from './bridge.mjs';
 
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
 const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const CONSEQUENTIAL = /(?:\b(?:publish|post|send|reply|repost|retweet|quote|like|unlike|bookmark|follow|unfollow|subscribe|purchase|buy|pay|delete|remove|login|log in|sign in|logout|log out|sign out|verify|verification|2fa|two-factor|captcha|authorize|authorization|save|submit|confirm|create|update|edit|password|account|block|unblock|mute|unmute|report|dm|direct message)\b|投稿|ポスト|送信|返信|リプライ|リポスト|再投稿|引用|いいね|ブックマーク|フォロー|購読|購入|支払|削除|取り消し|ログイン|サインイン|ログアウト|認証|二要素|二段階|2段階|確認コード|キャプチャ|保存|確認|作成|更新|編集|パスワード|アカウント|ブロック|ミュート|報告|ダイレクトメッセージ)/i;
+const CONSEQUENTIAL = /(?:\b(?:publish|post|send|reply|repost|retweet|quote|like|unlike|bookmark|follow|unfollow|subscribe|purchase|buy|pay|delete|remove|login|log in|sign in|logout|log out|sign out|verify|verification|2fa|two-factor|captcha|authorize|authorization|save|submit|confirm|create|update|edit|password|account|block|unblock|mute|unmute|report|dm|direct message|vote|agree|accept|join)\b|投稿|ポスト|送信|返信|リプライ|リポスト|再投稿|引用|いいね|ブックマーク|フォロー|購読|購入|支払|削除|取り消し|ログイン|サインイン|ログアウト|認証|二要素|二段階|2段階|確認コード|キャプチャ|保存|確認|作成|更新|編集|パスワード|アカウント|ブロック|ミュート|報告|ダイレクトメッセージ|投票|同意|承諾|参加)/i;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const WRAPPER_KEYS = new Set(['PageUp','PageDown']);
 const tools = [
   {name:'jev_user_tabs',description:'List existing browser tabs available to claim.',inputSchema:{type:'object',properties:{}}},
@@ -33,30 +34,39 @@ export function browserBridgeArgs(command,runDoctor=spawnSync) {
   return args;
 }
 
-class BrowserMcpClient {
-  constructor(command=process.env.CODEX_BROWSER_BRIDGE_COMMAND || 'codex-browser-bridge') {
+export class BrowserMcpClient {
+  constructor(command=process.env.CODEX_BROWSER_BRIDGE_COMMAND || 'codex-browser-bridge',requestTimeoutMs=DEFAULT_REQUEST_TIMEOUT_MS) {
     if (!SAFE_COMMAND.test(command)) throw new Error('Invalid CODEX_BROWSER_BRIDGE_COMMAND');
     this.child = spawn(command,browserBridgeArgs(command),{stdio:['pipe','pipe','inherit'],shell:process.platform === 'win32' && /\.cmd$/i.test(command)});
     this.pending = new Map();
     this.nextId = 1;
+    this.requestTimeoutMs = requestTimeoutMs;
     createInterface({input:this.child.stdout}).on('line',line => {
       let message;
       try { message=JSON.parse(line); } catch { return; }
       const pending=this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
+      clearTimeout(pending.timeout);
       message.error ? pending.reject(new Error('Browser MCP request failed')) : pending.resolve(message.result);
     });
-    this.child.on('exit',() => {
-      for (const pending of this.pending.values()) pending.reject(new Error('Browser MCP exited'));
-      this.pending.clear();
-    });
+    this.child.on('error',error => this.rejectPending(error));
+    this.child.on('exit',() => this.rejectPending(new Error('Browser MCP exited')));
+  }
+  rejectPending(error) {
+    for (const pending of this.pending.values()) { clearTimeout(pending.timeout); pending.reject(error); }
+    this.pending.clear();
   }
   request(method,params) {
     const id=this.nextId++;
     return new Promise((resolve,reject) => {
-      this.pending.set(id,{resolve,reject});
-      this.child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);
+      const timeout=setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Browser MCP request timed out after ${this.requestTimeoutMs} ms`));
+      },this.requestTimeoutMs);
+      this.pending.set(id,{resolve,reject,timeout});
+      try { this.child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`); }
+      catch (error) { this.pending.delete(id); clearTimeout(timeout); reject(error); }
     });
   }
   notify(method,params) { this.child.stdin.write(`${JSON.stringify({jsonrpc:'2.0',method,params})}\n`); }
@@ -149,7 +159,10 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   const controls=args.controls ?? [];
   if (!Array.isArray(controls) || controls.some(control =>
     !control || !['click','scroll','reload','press'].includes(control.op) ||
-    (control.op === 'click' && CONSEQUENTIAL.test(control.name ?? '')) ||
+    (control.op === 'click' && (
+      (control.aliases !== undefined && (!Array.isArray(control.aliases) || control.aliases.some(alias=>typeof alias !== 'string'))) ||
+      [control.name,...(control.aliases ?? [])].some(label=>CONSEQUENTIAL.test(label ?? ''))
+    )) ||
     (control.op === 'press' && !WRAPPER_KEYS.has(control.key)))) throw new Error('Unsafe Claude browser control');
   const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
   const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
