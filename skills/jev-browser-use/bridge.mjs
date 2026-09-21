@@ -111,13 +111,25 @@ function safeToExecuteAfterRefresh(before,after,action) {
 function validateControl(control) {
   if (!control || typeof control !== 'object') return false;
   if (control.op === 'click') return typeof control.name === 'string' && !!control.name;
+  if (control.op === 'navigate') {
+    try { return ['http:','https:'].includes(new URL(control.url).protocol); } catch { return false; }
+  }
   if (control.op === 'scroll') return ['up','down'].includes(control.direction) && Number.isInteger(control.amount ?? 1) && (control.amount ?? 1) >= 1 && (control.amount ?? 1) <= 5 && (!control.targetName || typeof control.targetName === 'string') && (!control.point || (Array.isArray(control.point) && control.point.length === 2 && control.point.every(Number.isFinite))) && !(control.targetName && control.point);
   if (control.op === 'press') return safeKeys.has(control.key);
   return control.op === 'reload';
 }
 
+export function assertNavigationOrigins(controls,allowedOrigins) {
+  for (const control of controls) if (control.op === 'navigate') {
+    let origin;
+    try { origin=new URL(control.url).origin; } catch { throw new Error('Invalid navigation URL'); }
+    if (!allowedOrigins.includes(origin)) throw new Error('Browser navigation origin is not authorized by host');
+  }
+}
+
 function description(control) {
   if (control.description) return control.description;
+  if (control.op === 'navigate') return `Navigate to ${control.url}`;
   if (control.op === 'scroll') return `Scroll ${control.direction}${(control.amount ?? 1) > 1 ? ` ${control.amount} pages` : ''}${control.targetName ? ` within ${control.targetName}` : control.point ? ' within the Codex-identified region' : ''}`;
   if (control.op === 'press') return `Press ${control.key}`;
   if (control.op === 'reload') return 'Reload the current page';
@@ -164,6 +176,10 @@ export function availableActions(state, controls=[]) {
   const actions = [];
   for (const control of controls) {
     if (!validateControl(control)) throw new Error('Unsupported action');
+    if (control.op === 'navigate') {
+      actions.push({...control,description:description(control)});
+      continue;
+    }
     if (control.op === 'scroll') {
       const names = [control.targetName,...(control.targetAliases ?? [])].filter(Boolean);
       const matches = names.length ? entries.filter(entry => names.some(name => matchesName(entry.name,name))) : [];
@@ -215,6 +231,7 @@ export function discoverActions(state, policy={}) {
 
 async function execute(tab, action) {
   if (action.op === 'click') await tab.click(action.index);
+  else if (action.op === 'navigate') await tab.navigate(action.url);
   else if (action.op === 'scroll' && action.target !== undefined) await tab.scroll(action.target,action.direction,action.amount ?? 1);
   else if (action.op === 'scroll') for (let i=0;i<(action.amount ?? 1);i++) await tab.pressKey(null,action.direction === 'down' ? 'PageDown' : 'PageUp');
   else if (action.op === 'press') await tab.pressKey(null,action.key);
@@ -232,6 +249,7 @@ function result(status,history,state,startedAt,details={}) {
 // This accepts only an already-authorized cua_repl tab, never opens a browser.
 export async function run(tab,{goal,controls=[],policy,envFile,provider,model,allowedOrigins,maxSteps=10,minConfidence=0.55,maxMs=45000,decisionTimeoutMs=20000,maxDecisionRetries=1,waitPollMs=750},prior=[]) {
   if (typeof goal !== 'string' || !goal || !Array.isArray(controls) || (!controls.length && !policy) || controls.some(control => !validateControl(control)) || !Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 30 || !Number.isFinite(maxMs) || maxMs < 1 || maxMs > 45000 || !Number.isFinite(decisionTimeoutMs) || decisionTimeoutMs < 1000 || decisionTimeoutMs > 30000 || !Number.isInteger(maxDecisionRetries) || maxDecisionRetries < 0 || maxDecisionRetries > 2 || !Number.isFinite(minConfidence) || minConfidence < 0.55 || minConfidence > 1 || !Number.isFinite(waitPollMs) || waitPollMs < 100 || waitPollMs > 5000 || !Array.isArray(allowedOrigins) || !allowedOrigins.length) throw new Error('Invalid task contract');
+  assertNavigationOrigins(controls,allowedOrigins);
   const history = [...prior];
   const startedAt = performance.now();
   let waits = 0;
@@ -241,8 +259,8 @@ export async function run(tab,{goal,controls=[],policy,envFile,provider,model,al
     checkState(state,allowedOrigins);
     if (performance.now()-startedAt > maxMs) return result('budget',history,state,startedAt);
     const actions = [...availableActions(state,controls),...discoverActions(state,policy)].filter((action,index,all) => {
-      const key = `${action.op}:${action.index ?? ''}:${action.direction ?? ''}:${action.amount ?? ''}:${action.key ?? ''}:${String(action.target ?? '')}`;
-      return all.findIndex(candidate => `${candidate.op}:${candidate.index ?? ''}:${candidate.direction ?? ''}:${candidate.amount ?? ''}:${candidate.key ?? ''}:${String(candidate.target ?? '')}` === key) === index;
+      const key = `${action.op}:${action.index ?? ''}:${action.direction ?? ''}:${action.amount ?? ''}:${action.key ?? ''}:${action.url ?? ''}:${String(action.target ?? '')}`;
+      return all.findIndex(candidate => `${candidate.op}:${candidate.index ?? ''}:${candidate.direction ?? ''}:${candidate.amount ?? ''}:${candidate.key ?? ''}:${candidate.url ?? ''}:${String(candidate.target ?? '')}` === key) === index;
     });
     let decision;
     const decisionStartedAt = performance.now();

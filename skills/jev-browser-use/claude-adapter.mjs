@@ -55,6 +55,7 @@ export function createClaudeCodeTab({tabId,callTool}) {
       if (!['PageDown','PageUp'].includes(key)) throw new Error('Claude browser key requires host handback');
       return pageScroll(key === 'PageDown' ? 'down' : 'up');
     },
+    navigate: url => call('codex_navigate',{url}),
     reload: () => call('codex_reload')
   });
 }
