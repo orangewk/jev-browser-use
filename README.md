@@ -103,7 +103,7 @@ Host policy can narrow the wrapper further in the shared Jev config:
     "actors": {
       "codex": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 },
       "claude": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 },
-      "shii": { "allowedOrigins": ["https://x.com"], "maxSteps": 3 }
+      "shii": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 }
     }
   }
 }
@@ -115,7 +115,8 @@ against a malicious local process. A caller may narrow its configured origins
 or step limit, but cannot widen them. To expand an agent later, edit only that
 actor's entry. The legacy `allowedOrigins` / `allowedActors` form remains
 accepted during migration. Do not run two agent tasks against the same browser
-at once.
+at once. A resident runner may additionally impose a per-beat spend budget;
+that budget is separate from this shared capability policy.
 
 The runtime prefers the provider credential from its process environment. A
 sandboxed Computer Use runtime may not expose process variables; in that case an
