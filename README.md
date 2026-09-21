@@ -100,16 +100,23 @@ Host policy can narrow the wrapper further in the shared Jev config:
   "provider": "typesafe",
   "model": "jev-latest",
   "browser": {
-    "allowedOrigins": ["https://x.com"],
-    "allowedActors": ["codex", "claude", "shii"]
+    "actors": {
+      "codex": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 },
+      "claude": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 },
+      "shii": { "allowedOrigins": ["https://x.com"], "maxSteps": 30 }
+    }
   }
 }
 ```
 
 Set `JEV_BROWSER_ACTOR` in each MCP registration. These actor labels provide
 policy and audit attribution for trusted local hosts; they are not a sandbox
-against a malicious local process. Do not run two agent tasks against the same
-browser at once.
+against a malicious local process. A caller may narrow its configured origins
+or step limit, but cannot widen them. To expand an agent later, edit only that
+actor's entry. The legacy `allowedOrigins` / `allowedActors` form remains
+accepted during migration. Do not run two agent tasks against the same browser
+at once. A resident runner may additionally impose a per-beat spend budget;
+that budget is separate from this shared capability policy.
 
 The runtime prefers the provider credential from its process environment. A
 sandboxed Computer Use runtime may not expose process variables; in that case an

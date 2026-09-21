@@ -6,6 +6,33 @@ export async function loadConfig() {
   return JSON.parse(await readFile(join(homedir(), '.config', 'jev-browser-use', 'config.json'), 'utf8'));
 }
 
+function validateOrigins(origins) {
+  if (!Array.isArray(origins) || !origins.length) throw new Error('Invalid configured browser origins');
+  return origins.map(value => {
+    if (typeof value !== 'string') throw new Error('Invalid configured browser origin');
+    const url = new URL(value);
+    if (url.origin !== value || !['https:','http:'].includes(url.protocol)) throw new Error('Invalid configured browser origin');
+    return value;
+  });
+}
+
+export function resolveBrowserPolicy(config,actor) {
+  if (typeof actor !== 'string' || !actor) throw new Error('Browser actor is not authorized');
+  const actors = config?.browser?.actors;
+  if (actors !== undefined) {
+    if (!actors || typeof actors !== 'object' || Array.isArray(actors)) throw new Error('Invalid configured browser actors');
+    const policy = actors[actor];
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) throw new Error('Browser actor is not authorized');
+    const maxSteps = policy.maxSteps;
+    if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 30) throw new Error('Invalid configured browser maxSteps');
+    return { allowedOrigins:validateOrigins(policy.allowedOrigins), maxSteps };
+  }
+  const allowed = config?.browser?.allowedActors;
+  if (!Array.isArray(allowed) || !allowed.length || allowed.some(value=>typeof value !== 'string' || !value)) throw new Error('Missing configured browser actors');
+  if (!allowed.includes(actor)) throw new Error('Browser actor is not authorized');
+  return { allowedOrigins:validateOrigins(config?.browser?.allowedOrigins), maxSteps:undefined };
+}
+
 const providers = {
   typesafe: {endpoint:'https://api.typesafe.ai/v1/systemone',keyName:'TYPESAFE_API_KEY',model:'jev-latest',modelPattern:/^jev-[a-z0-9.-]{1,80}$/},
   openrouter: {endpoint:'https://openrouter.ai/api/alpha/decisions',keyName:'OPENROUTER_API_KEY',model:'~typesafe/jev-latest',modelPattern:/^(?:~?typesafe\/)?jev-[a-z0-9.-]{1,80}$/}
@@ -289,6 +316,21 @@ export function createSession(tab,defaults={}) {
     metrics,
     history:() => [...history],
     reset() { history=[]; elapsedMs=0; runs=0; handoffs={}; }
+  };
+}
+
+export function createActorSession(tab,config,actor,defaults={}) {
+  const actorPolicy=resolveBrowserPolicy(config,actor);
+  const session=createSession(tab,{...config,...defaults,allowedOrigins:actorPolicy.allowedOrigins,maxSteps:actorPolicy.maxSteps ?? 10});
+  return {
+    ...session,
+    async run(task) {
+      const allowedOrigins=task.allowedOrigins ?? actorPolicy.allowedOrigins;
+      if (!Array.isArray(allowedOrigins) || !allowedOrigins.length || allowedOrigins.some(origin=>!actorPolicy.allowedOrigins.includes(origin))) throw new Error('Browser origin is not authorized by host');
+      const maxSteps=task.maxSteps ?? actorPolicy.maxSteps ?? 10;
+      if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > (actorPolicy.maxSteps ?? 30)) throw new Error('Browser maxSteps is not authorized by host');
+      return session.run({...task,allowedOrigins,maxSteps});
+    }
   };
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createSession, availableActions, discoverActions, run } from '../skills/jev-browser-use/bridge.mjs';
+import { createActorSession, createSession, availableActions, discoverActions, resolveBrowserPolicy, run } from '../skills/jev-browser-use/bridge.mjs';
 import { createClaudeCodeSession } from '../skills/jev-browser-use/claude-adapter.mjs';
 import { BrowserMcpClient, browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
 import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/start-windows-profile.mjs';
@@ -146,7 +146,7 @@ async function testHostBrowserPolicy() {
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',allowed_origins:['https://mail.google.com']},callTool,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
   await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'unknown'}),/actor is not authorized/);
   await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,{browser:{allowedActors:['claude']}},{JEV_BROWSER_ACTOR:'claude'}),/configured browser origins/);
-  await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,{browser:{allowedOrigins:['https://x.com']}},{}),/configured browser actors/);
+  await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,{browser:{allowedOrigins:['https://x.com']}},{}),/actor is not authorized/);
 
   calls.length=0;
   const wrongOrigin=async(name,args)=>{
@@ -156,6 +156,42 @@ async function testHostBrowserPolicy() {
   };
   await assert.rejects(()=>handleJevTool('jev_claim_tab',{tab_id:'9'},wrongOrigin,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
   assert.equal(calls.at(-1)[0],'codex_finalize');
+}
+
+async function testActorBrowserPolicy() {
+  const config={browser:{actors:{
+    codex:{allowedOrigins:['https://x.com','https://example.com'],maxSteps:30},
+    shii:{allowedOrigins:['https://x.com'],maxSteps:2}
+  }}};
+  assert.deepEqual(resolveBrowserPolicy(config,'shii'),{allowedOrigins:['https://x.com'],maxSteps:2});
+  assert.throws(()=>resolveBrowserPolicy(config,'unknown'),/not authorized/);
+  const direct=createActorSession(transport(),config,'shii');
+  await assert.rejects(()=>direct.run({goal:'read',policy:{click:true},allowedOrigins:['https://example.com']}),/origin is not authorized/);
+  await assert.rejects(()=>direct.run({goal:'read',policy:{click:true},maxSteps:3}),/maxSteps is not authorized/);
+
+  const calls=[];
+  const callTool=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_user_tabs') return {content:[{type:'text',text:JSON.stringify([
+      {id:'9',url:'https://x.com/home',title:'X'},
+      {id:'10',url:'https://example.com/',title:'Example'}
+    ])}]};
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://x.com/home'}]};
+    if(name==='codex_dom_snapshot') return {content:[{type:'text',text:JSON.stringify({nodes:[{role:{value:'button'},name:{value:'Next'},backendDOMNodeId:42}]})}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  assert.deepEqual(await handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'shii'}),[{id:'9',url:'https://x.com/home',title:'X'}]);
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',max_steps:3},callTool,config,{JEV_BROWSER_ACTOR:'shii'}),/max_steps is not authorized/);
+  const old=process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret';
+  const oldFetch=globalThis.fetch; globalThis.fetch=async(_url,options)=>{
+    const criteria=JSON.parse(options.body).questions.next.criteria;
+    const probabilities=Object.fromEntries(Object.keys(criteria).map(key=>[key,key==='DONE'?1:0]));
+    return new Response(JSON.stringify({model:'jev-latest',answers:{next:{type:'choice',choice:'DONE',confidence:1,probabilities}}}),{status:200});
+  };
+  try {
+    const out=await handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',max_steps:1},callTool,config,{JEV_BROWSER_ACTOR:'shii'});
+    assert.equal(out.status,'needs_verification');
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
 }
 
 async function testDynamicPageScroll() {
@@ -207,6 +243,6 @@ async function testClaudePipeRecovery() {
   assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['claude request timeout',testClaudeRequestTimeout],['host browser policy',testHostBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['claude request timeout',testClaudeRequestTimeout],['host browser policy',testHostBrowserPolicy],['actor browser policy',testActorBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }
