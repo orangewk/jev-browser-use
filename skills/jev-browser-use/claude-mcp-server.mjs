@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createClaudeCodeSession } from './claude-adapter.mjs';
-import { loadConfig } from './bridge.mjs';
+import { loadConfig, resolveBrowserPolicy } from './bridge.mjs';
 
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
 const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -12,7 +12,7 @@ const WRAPPER_KEYS = new Set(['PageUp','PageDown']);
 const tools = [
   {name:'jev_user_tabs',description:'List existing browser tabs available to claim.',inputSchema:{type:'object',properties:{}}},
   {name:'jev_claim_tab',description:'Claim one existing browser tab for bounded Jev operation.',inputSchema:{type:'object',properties:{tab_id:{type:'string'}},required:['tab_id']}},
-  {name:'jev_browser_run',description:'Run the shared bounded Jev browser loop on a claimed tab. Text entry and consequential actions are not exposed.',inputSchema:{type:'object',properties:{tab_id:{type:'string'},goal:{type:'string'},allowed_origins:{type:'array',items:{type:'string'}},controls:{type:'array'},policy:{type:'object'},max_steps:{type:'integer',minimum:1,maximum:30},min_confidence:{type:'number',minimum:0.55,maximum:1}},required:['tab_id','goal','allowed_origins']}}
+  {name:'jev_browser_run',description:'Run the shared bounded Jev browser loop on a claimed tab. Text entry and consequential actions are not exposed.',inputSchema:{type:'object',properties:{tab_id:{type:'string'},goal:{type:'string'},allowed_origins:{type:'array',items:{type:'string'}},controls:{type:'array'},policy:{type:'object'},max_steps:{type:'integer',minimum:1,maximum:30},min_confidence:{type:'number',minimum:0.55,maximum:1}},required:['tab_id','goal']}}
 ];
 
 export function browserBridgeArgs(command,runDoctor=spawnSync) {
@@ -83,30 +83,14 @@ function assertString(value,name) {
   return value;
 }
 
-function configuredOrigins(config) {
-  const origins=config?.browser?.allowedOrigins;
-  if (origins === undefined) throw new Error('Missing configured browser origins');
-  if (!Array.isArray(origins) || !origins.length) throw new Error('Invalid configured browser origins');
-  return origins.map(value => {
-    if (typeof value !== 'string') throw new Error('Invalid configured browser origin');
-    const url=new URL(value);
-    if (url.origin !== value || !['https:','http:'].includes(url.protocol)) throw new Error('Invalid configured browser origin');
-    return value;
-  });
-}
-
 function enforceActor(config,env) {
-  const allowed=config?.browser?.allowedActors;
-  if (allowed === undefined) throw new Error('Missing configured browser actors');
-  if (!Array.isArray(allowed) || !allowed.length || allowed.some(value=>typeof value !== 'string' || !value)) throw new Error('Invalid configured browser actors');
   const actor=env.JEV_BROWSER_ACTOR;
-  if (!actor || !allowed.includes(actor)) throw new Error('Browser actor is not authorized');
-  return actor;
+  return {actor,policy:resolveBrowserPolicy(config,actor)};
 }
 
-function enforceOrigins(requested,config) {
-  const configured=configuredOrigins(config);
-  if (requested.some(origin=>!configured.includes(origin))) throw new Error('Browser origin is not authorized by host');
+function enforceOrigins(requested,policy) {
+  if (requested === undefined) return policy.allowedOrigins;
+  if (!Array.isArray(requested) || !requested.length || requested.some(origin=>typeof origin !== 'string' || !policy.allowedOrigins.includes(origin))) throw new Error('Browser origin is not authorized by host');
   return requested;
 }
 
@@ -123,28 +107,26 @@ function originFromUrlText(value) {
   return new URL(match[0]).origin;
 }
 
-function filterUserTabs(result,config) {
-  const configured=configuredOrigins(config);
+function filterUserTabs(result,policy) {
   let tabs;
   try { tabs=JSON.parse(toolText(result)); } catch { throw new Error('Browser transport returned invalid tab list'); }
   if (!Array.isArray(tabs)) throw new Error('Browser transport returned invalid tab list');
   return tabs.filter(tab=>{
-    try { return typeof tab?.url === 'string' && configured.includes(new URL(tab.url).origin); }
+    try { return typeof tab?.url === 'string' && policy.allowedOrigins.includes(new URL(tab.url).origin); }
     catch { return false; }
   });
 }
 
 export async function handleJevTool(name,args,callTool,config=undefined,env=process.env) {
   config ??= await loadConfig();
-  const actor=enforceActor(config,env);
-  if (name === 'jev_user_tabs') return filterUserTabs(await callTool('codex_user_tabs',{}),config);
+  const {actor,policy:actorPolicy}=enforceActor(config,env);
+  if (name === 'jev_user_tabs') return filterUserTabs(await callTool('codex_user_tabs',{}),actorPolicy);
   if (name === 'jev_claim_tab') {
     const tabId=assertString(args?.tab_id,'tab_id');
-    const configured=configuredOrigins(config);
     const claimed=await callTool('codex_claim_tab',{tab_id:tabId});
     try {
       const actual=originFromUrlText(toolText(await callTool('codex_get_url',{tab_id:tabId})));
-      if (!configured.includes(actual)) throw new Error('Claimed tab origin is not authorized by host');
+      if (!actorPolicy.allowedOrigins.includes(actual)) throw new Error('Claimed tab origin is not authorized by host');
       return claimed;
     } catch (error) {
       try { await callTool('codex_finalize',{}); } catch {}
@@ -154,8 +136,7 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   if (name !== 'jev_browser_run') throw new Error('Unknown Jev browser tool');
   const tabId=assertString(args?.tab_id,'tab_id');
   const goal=assertString(args?.goal,'goal');
-  if (!Array.isArray(args?.allowed_origins) || !args.allowed_origins.length) throw new Error('Invalid allowed_origins');
-  const allowedOrigins=enforceOrigins(args.allowed_origins,config);
+  const allowedOrigins=enforceOrigins(args?.allowed_origins,actorPolicy);
   const controls=args.controls ?? [];
   if (!Array.isArray(controls) || controls.some(control =>
     !control || !['click','scroll','reload','press'].includes(control.op) ||
@@ -166,7 +147,9 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
     (control.op === 'press' && !WRAPPER_KEYS.has(control.key)))) throw new Error('Unsafe Claude browser control');
   const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
   const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
-  const session=createClaudeCodeSession({tabId,callTool},{...config,allowedOrigins,maxSteps:args.max_steps ?? 10,minConfidence:args.min_confidence ?? 0.55});
+  const maxSteps=args.max_steps ?? actorPolicy.maxSteps ?? 10;
+  if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > (actorPolicy.maxSteps ?? 30)) throw new Error('Browser max_steps is not authorized by host');
+  const session=createClaudeCodeSession({tabId,callTool},{...config,allowedOrigins,maxSteps,minConfidence:args.min_confidence ?? 0.55});
   try {
     return {...await session.run({goal,controls,policy}),actor};
   } finally {
