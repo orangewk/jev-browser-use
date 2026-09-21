@@ -73,13 +73,15 @@ async function testCredentials() { const old=process.env.TYPESAFE_API_KEY; delet
 
 async function testClaudeBoundary() {
   const calls=[];
-  const callTool=async(name,args)=>{calls.push([name,args]); return {content:[{type:'text',text:'[]'}]};};
-  await handleJevTool('jev_user_tabs',{},callTool,{});
-  await handleJevTool('jev_claim_tab',{tab_id:'9'},callTool,{});
-  assert.deepEqual(calls.map(([name])=>name),['codex_user_tabs','codex_claim_tab']);
+  const callTool=async(name,args)=>{calls.push([name,args]); return {content:[{type:'text',text:name==='codex_get_url'?'https://x.com/home':'[]'}]};};
+  const config={browser:{allowedOrigins:['https://x.com'],allowedActors:['shii']}};
+  const env={JEV_BROWSER_ACTOR:'shii'};
+  await handleJevTool('jev_user_tabs',{},callTool,config,env);
+  await handleJevTool('jev_claim_tab',{tab_id:'9'},callTool,config,env);
+  assert.deepEqual(calls.map(([name])=>name),['codex_user_tabs','codex_claim_tab','codex_get_url']);
   assert.deepEqual(calls[1][1],{tab_id:'9'});
-  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'like it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'Like'}]},callTool,{}),/Unsafe Claude browser control/);
-  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'post it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'ポストする'}]},callTool,{}),/Unsafe Claude browser control/);
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'like it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'Like'}]},callTool,config,env),/Unsafe Claude browser control/);
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'post it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'ポストする'}]},callTool,config,env),/Unsafe Claude browser control/);
 }
 
 async function testLocalizedConsequentialDiscovery() {
@@ -132,6 +134,17 @@ async function testHostBrowserPolicy() {
   assert.deepEqual(tabs,[{id:'9',url:'https://x.com/home',title:'X'}]);
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'read',allowed_origins:['https://mail.google.com']},callTool,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
   await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,config,{JEV_BROWSER_ACTOR:'unknown'}),/actor is not authorized/);
+  await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,{browser:{allowedActors:['claude']}},{JEV_BROWSER_ACTOR:'claude'}),/configured browser origins/);
+  await assert.rejects(()=>handleJevTool('jev_user_tabs',{},callTool,{browser:{allowedOrigins:['https://x.com']}},{}),/configured browser actors/);
+
+  calls.length=0;
+  const wrongOrigin=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://example.com/'}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  await assert.rejects(()=>handleJevTool('jev_claim_tab',{tab_id:'9'},wrongOrigin,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
+  assert.equal(calls.at(-1)[0],'codex_finalize');
 }
 
 async function testDynamicPageScroll() {

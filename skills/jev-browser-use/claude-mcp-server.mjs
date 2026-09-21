@@ -75,7 +75,7 @@ function assertString(value,name) {
 
 function configuredOrigins(config) {
   const origins=config?.browser?.allowedOrigins;
-  if (origins === undefined) return null;
+  if (origins === undefined) throw new Error('Missing configured browser origins');
   if (!Array.isArray(origins) || !origins.length) throw new Error('Invalid configured browser origins');
   return origins.map(value => {
     if (typeof value !== 'string') throw new Error('Invalid configured browser origin');
@@ -87,7 +87,7 @@ function configuredOrigins(config) {
 
 function enforceActor(config,env) {
   const allowed=config?.browser?.allowedActors;
-  if (allowed === undefined) return env.JEV_BROWSER_ACTOR || 'unspecified';
+  if (allowed === undefined) throw new Error('Missing configured browser actors');
   if (!Array.isArray(allowed) || !allowed.length || allowed.some(value=>typeof value !== 'string' || !value)) throw new Error('Invalid configured browser actors');
   const actor=env.JEV_BROWSER_ACTOR;
   if (!actor || !allowed.includes(actor)) throw new Error('Browser actor is not authorized');
@@ -96,7 +96,6 @@ function enforceActor(config,env) {
 
 function enforceOrigins(requested,config) {
   const configured=configuredOrigins(config);
-  if (!configured) return requested;
   if (requested.some(origin=>!configured.includes(origin))) throw new Error('Browser origin is not authorized by host');
   return requested;
 }
@@ -116,7 +115,6 @@ function originFromUrlText(value) {
 
 function filterUserTabs(result,config) {
   const configured=configuredOrigins(config);
-  if (!configured) return result;
   let tabs;
   try { tabs=JSON.parse(toolText(result)); } catch { throw new Error('Browser transport returned invalid tab list'); }
   if (!Array.isArray(tabs)) throw new Error('Browser transport returned invalid tab list');
@@ -132,13 +130,16 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   if (name === 'jev_user_tabs') return filterUserTabs(await callTool('codex_user_tabs',{}),config);
   if (name === 'jev_claim_tab') {
     const tabId=assertString(args?.tab_id,'tab_id');
-    const claimed=await callTool('codex_claim_tab',{tab_id:tabId});
     const configured=configuredOrigins(config);
-    if (configured) {
+    const claimed=await callTool('codex_claim_tab',{tab_id:tabId});
+    try {
       const actual=originFromUrlText(toolText(await callTool('codex_get_url',{tab_id:tabId})));
       if (!configured.includes(actual)) throw new Error('Claimed tab origin is not authorized by host');
+      return claimed;
+    } catch (error) {
+      try { await callTool('codex_finalize',{}); } catch {}
+      throw error;
     }
-    return claimed;
   }
   if (name !== 'jev_browser_run') throw new Error('Unknown Jev browser tool');
   const tabId=assertString(args?.tab_id,'tab_id');
