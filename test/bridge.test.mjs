@@ -7,7 +7,7 @@ import { chromeCandidates, profileDirectory } from '../skills/jev-browser-use/st
 const state = (url = 'https://chatgpt.com/') => `Browser tab: Chat URL: "${url}".\n0 button Description: Next`;
 function transport(states = [state()]) {
   let reads = 0; const calls = [];
-  return { calls, getAXState: async () => states[Math.min(reads++, states.length - 1)], click: async (i) => calls.push(['click', i]), scroll: async (...a) => calls.push(['scroll', ...a]), pressKey: async (...a) => calls.push(['pressKey', ...a]), reload: async () => calls.push(['reload']) };
+  return { calls, getAXState: async () => states[Math.min(reads++, states.length - 1)], click: async (i) => calls.push(['click', i]), navigate: async url => calls.push(['navigate',url]), scroll: async (...a) => calls.push(['scroll', ...a]), pressKey: async (...a) => calls.push(['pressKey', ...a]), reload: async () => calls.push(['reload']) };
 }
 function claudeTransport(url='https://chatgpt.com/') {
   const calls=[];
@@ -82,6 +82,30 @@ async function testClaudeBoundary() {
   assert.deepEqual(calls[1][1],{tab_id:'9'});
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'like it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'Like'}]},callTool,config,env),/Unsafe Claude browser control/);
   await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'post it',allowed_origins:['https://x.com'],controls:[{op:'click',name:'ポストする'}]},callTool,config,env),/Unsafe Claude browser control/);
+}
+
+async function testNavigationControl() {
+  const url='https://x.com/i/communities';
+  const old=process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY='secret'; const oldFetch=globalThis.fetch; globalThis.fetch=async()=>response('a0');
+  const config={browser:{allowedOrigins:['https://x.com'],allowedActors:['shii']}};
+  const calls=[];
+  const callTool=async(name,args)=>{
+    calls.push([name,args]);
+    if(name==='codex_get_url') return {content:[{type:'text',text:'https://x.com/home'}]};
+    if(name==='codex_dom_snapshot') return {content:[{type:'text',text:JSON.stringify({nodes:[]})}]};
+    return {content:[{type:'text',text:'ok'}]};
+  };
+  try {
+    await handleJevTool('jev_browser_run',{tab_id:'9',goal:'open communities',controls:[{op:'navigate',url}],policy:{},max_steps:1},callTool,config,{JEV_BROWSER_ACTOR:'shii'});
+    assert.deepEqual(calls.find(([name])=>name==='codex_navigate'),['codex_navigate',{tab_id:'9',url}]);
+  } finally { globalThis.fetch=oldFetch; if(old===undefined)delete process.env.TYPESAFE_API_KEY;else process.env.TYPESAFE_API_KEY=old; }
+
+  const blockedCalls=[];
+  await assert.rejects(()=>handleJevTool('jev_browser_run',{tab_id:'9',goal:'open elsewhere',controls:[{op:'navigate',url:'https://example.com/'}],max_steps:1},async(name,args)=>{blockedCalls.push([name,args]);},config,{JEV_BROWSER_ACTOR:'shii'}),/navigation origin is not authorized/);
+  assert.deepEqual(blockedCalls,[]);
+  const direct=transport();
+  await assert.rejects(()=>run(direct,{goal:'open elsewhere',controls:[{op:'navigate',url:'https://example.com/'}],allowedOrigins:['https://x.com']}),/navigation origin is not authorized/);
+  assert.deepEqual(direct.calls,[]);
 }
 
 async function testLocalizedConsequentialDiscovery() {
@@ -243,6 +267,6 @@ async function testClaudePipeRecovery() {
   assert.deepEqual(browserBridgeArgs('bridge.exe',()=>({status:0,stdout:'not json'})),['--mode','mcp','--profile','basic']);
 }
 
-for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['claude request timeout',testClaudeRequestTimeout],['host browser policy',testHostBrowserPolicy],['actor browser policy',testActorBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
+for (const [name, fn] of [['shared loop',testSharedLoop],['stale state',testStaleState],['dynamic page scroll',testDynamicPageScroll],['page scroll contract',testPageScrollContract],['large snapshot',testLargeSnapshotCompaction],['bounds',testBounds],['credentials',testCredentials],['claude boundary',testClaudeBoundary],['navigation control',testNavigationControl],['localized consequential discovery',testLocalizedConsequentialDiscovery],['authentication and messaging controls',testAuthenticationAndMessagingControls],['claude request timeout',testClaudeRequestTimeout],['host browser policy',testHostBrowserPolicy],['actor browser policy',testActorBrowserPolicy],['claude finalizes run',testClaudeFinalizesRun],['windows profile paths',testWindowsProfilePaths],['claude pipe recovery',testClaudePipeRecovery]]) {
   await fn(); console.log(`PASS ${name}`);
 }

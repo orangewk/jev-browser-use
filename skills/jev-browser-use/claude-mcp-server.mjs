@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createClaudeCodeSession } from './claude-adapter.mjs';
-import { loadConfig, resolveBrowserPolicy } from './bridge.mjs';
+import { assertNavigationOrigins, loadConfig, resolveBrowserPolicy } from './bridge.mjs';
 
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
 const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -139,12 +139,14 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   const allowedOrigins=enforceOrigins(args?.allowed_origins,actorPolicy);
   const controls=args.controls ?? [];
   if (!Array.isArray(controls) || controls.some(control =>
-    !control || !['click','scroll','reload','press'].includes(control.op) ||
+    !control || !['click','navigate','scroll','reload','press'].includes(control.op) ||
+    (control.op === 'navigate' && typeof control.url !== 'string') ||
     (control.op === 'click' && (
       (control.aliases !== undefined && (!Array.isArray(control.aliases) || control.aliases.some(alias=>typeof alias !== 'string'))) ||
       [control.name,...(control.aliases ?? [])].some(label=>CONSEQUENTIAL.test(label ?? ''))
     )) ||
     (control.op === 'press' && !WRAPPER_KEYS.has(control.key)))) throw new Error('Unsafe Claude browser control');
+  assertNavigationOrigins(controls,allowedOrigins);
   const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
   const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
   const maxSteps=args.max_steps ?? actorPolicy.maxSteps ?? 10;

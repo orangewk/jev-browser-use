@@ -118,6 +118,11 @@ accepted during migration. Do not run two agent tasks against the same browser
 at once. A resident runner may additionally impose a per-beat spend budget;
 that budget is separate from this shared capability policy.
 
+Within `jev_browser_run`, a supplied `{ "op": "navigate", "url": "https://x.com/..." }`
+control can open a URL only when its origin is in that actor's `allowedOrigins`.
+Other origins are rejected before the browser receives the navigation request.
+This does not expose text entry or consequential actions.
+
 The runtime prefers the provider credential from its process environment. A
 sandboxed Computer Use runtime may not expose process variables; in that case an
 existing `envFile` can be configured as a compatibility fallback. The installer
