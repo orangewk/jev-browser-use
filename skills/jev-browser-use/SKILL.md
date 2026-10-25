@@ -30,6 +30,21 @@ The user configuration works across project directories. The helper first reads 
 
 ## Claude Code transport
 
+### Isolated Playwright transport
+
+`playwright-adapter.mjs` accepts a page owned by a separate browser process and
+connects it to the existing Jev `createSession` contract. The host owns browser
+startup, a dedicated persistent profile and lifecycle. The adapter does not
+connect to the desktop extension, bring a window forward, or use OS input.
+Playwright is supplied by the host; the shared skill does not install a browser
+into a user's normal Chrome profile. `createPlaywrightXBrowser` supplies typed
+page operations to the same X domain logic used by the native adapter.
+
+For XI-ID, the Linux host explicitly selects `XI_ID_BROWSER_BACKEND=playwright`.
+It serializes page operations and keeps the browser alive across beats. Draft
+content is stored in private local state for restart recovery. An unknown
+publish result retains its exclusive no-replay marker.
+
 ### XI-ID public X capability
 
 When the host config explicitly enables `browser.actors.shii.xPosting`, XI-ID

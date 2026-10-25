@@ -4,7 +4,9 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 hosted-image AppArmor blocks this unprivileged browser sandbox.
+    # Keep Chromium sandbox enabled and use a supported image with user namespaces.
+    runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -12,3 +14,6 @@ jobs:
         with:
           node-version: 24
       - run: node test/index.js
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
