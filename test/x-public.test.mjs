@@ -21,7 +21,7 @@ function fixture() {
     if(name==='codex_get_url')return result(state.url);
     if(name==='codex_evaluate')return result({result:{type:'object',value:state}});
     if(name==='codex_navigate'){
-      state.url=args.url; state.editor=''; state.images=0; state.toastLinks=[]; state.submit={testId:'tweetButton',disabled:true};
+      state.url=args.url; state.editor='\n'; state.images=0; state.toastLinks=[]; state.submit={testId:'tweetButton',disabled:true};
       const u=new URL(args.url); const id=u.searchParams.get('in_reply_to'); const quote=u.searchParams.get('attachment_url');
       state.contextLinks=fake.noContext?[]:id?[`https://x.com/other/status/${id}`]:quote?[quote]:[];
       return result('navigated');
