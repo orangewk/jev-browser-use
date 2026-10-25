@@ -9,7 +9,7 @@ import { handleXPublicTool, X_TOOL_NAMES, X_TOOL_DEFINITIONS } from './x-public.
 const SAFE_COMMAND = /^[\w .:\\/@-]+(?:\.cmd|\.exe)?$/i;
 const SAFE_PIPE = /^codex-browser-use(?:\\|-)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const CONSEQUENTIAL = /(?:\b(?:publish|post|send|reply|repost|retweet|quote|like|unlike|bookmark|follow|unfollow|subscribe|purchase|buy|pay|delete|remove|login|log in|sign in|logout|log out|sign out|verify|verification|2fa|two-factor|captcha|authorize|authorization|save|submit|confirm|create|update|edit|password|account|block|unblock|mute|unmute|report|dm|direct message|vote|agree|accept|join)\b|投稿|ポスト|送信|返信|リプライ|リポスト|再投稿|引用|いいね|ブックマーク|フォロー|購読|購入|支払|削除|取り消し|ログイン|サインイン|ログアウト|認証|二要素|二段階|2段階|確認コード|キャプチャ|保存|確認|作成|更新|編集|パスワード|アカウント|ブロック|ミュート|報告|ダイレクトメッセージ|投票|同意|承諾|参加)/i;
-const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 45000;
 const WRAPPER_KEYS = new Set(['PageUp','PageDown']);
 const BROWSER_CHROME_ENV = 'XI_ID_BROWSER_CHROME';
 const BROWSER_PROFILE_ENV = 'XI_ID_BROWSER_PROFILE';
@@ -185,10 +185,14 @@ function enforceOrigins(requested,policy) {
   return requested;
 }
 
-function toolText(result) {
+function toolText(result, operation='operation') {
   if (typeof result === 'string') return result;
   const value=result?.content?.filter(item=>item?.type === 'text').map(item=>item.text).join('\n');
-  if (result?.isError || typeof value !== 'string' || !value) throw new Error('Browser transport returned no text');
+  if (result?.isError) {
+    const kind=/stale|snapshot.*changed/i.test(value || '') ? 'tab snapshot changed; enumerate again' : /owned|ownership|another.*session|already part of/i.test(value || '') ? 'tab ownership unresolved; do not reclaim blindly' : /session.*invalid|invalid.*session|session.*not found|no session/i.test(value || '') ? 'CDP session invalid; inspect before retrying' : /timeout|timed out/i.test(value || '') ? 'timeout; outcome may be unknown' : 'bridge rejected operation';
+    throw new Error(`Browser ${operation} failed: ${kind}`);
+  }
+  if (typeof value !== 'string' || !value) throw new Error(`Browser ${operation} returned no text`);
   return value;
 }
 
@@ -222,6 +226,7 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
     const dedicated=config?.browser?.actors?.[actor]?.xPosting;
     if (dedicated && (typeof args.expected_title !== 'string' || typeof args.expected_url !== 'string')) throw new Error('Use expected_title and expected_url from jev_user_tabs when claiming the dedicated browser');
     const claimed=await callTool('codex_claim_tab',{tab_id:tabId,...(dedicated ? {expected_title:args.expected_title,expected_url:args.expected_url} : {})});
+    toolText(claimed,'tab claim');
     try {
       const actual=originFromUrlText(toolText(await callTool('codex_get_url',{tab_id:tabId})));
       if (!actorPolicy.allowedOrigins.includes(actual)) throw new Error('Claimed tab origin is not authorized by host');

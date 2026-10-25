@@ -17,7 +17,7 @@ function fixture() {
   const fake={state,instance,publishes:0,unknown:false,noContext:false,profile:{open:false,fields:{name:'シー',bio:'',location:'',website:''},images:[],buttons:['保存']},waits:0,typed:0,saves:0};
   const result=value=>({content:[{type:'text',text:typeof value==='string'?value:JSON.stringify(value)}]});
   const call=async(name,args)=>{
-    if(fake.failTool===name) return {isError:true,content:[{type:'text',text:'Timeout: test-only sensitive detail must not be exposed'}]};
+    if(fake.failTool===name) return {isError:true,content:[{type:'text',text:fake.failDetail || 'Timeout: test-only sensitive detail must not be exposed'}]};
     if(name==='codex_bring_to_front')return result('foreground');
     if(name==='codex_get_info')return result({bridge:{selectedBrowser:{instance_id:fake.instance}}});
     if(name==='codex_get_url')return result(state.url);
@@ -100,6 +100,9 @@ try {
   const retry=fixture();retry.fake.failTool='codex_wait_for_element';
   await assert.rejects(()=>retry.run('jev_x_prepare',prepare),/at codex_wait_for_element: timeout$/);
   retry.fake.failTool=null;await retry.run('jev_x_prepare',prepare);assert.equal(retry.fake.typed,1,'preparing can resume with same intent');
+  const invalidSession=fixture();invalidSession.fake.failTool='codex_navigate';invalidSession.fake.failDetail='CDP session became invalid; outcome unknown. Private detail';
+  await assert.rejects(()=>invalidSession.run('jev_x_prepare',prepare),e=>e.message.includes('CDP session invalid')&&!e.message.includes('tab ownership')&&!e.message.includes('Private'));
+  assert.equal(invalidSession.fake.publishes,0);
   const filled=fixture();filled.fake.failTool='codex_cua_type';
   await assert.rejects(()=>filled.run('jev_x_prepare',prepare),e=>e.message.endsWith('codex_cua_type: timeout')&&!e.message.includes('sensitive'));
   filled.fake.failTool=null;filled.fake.state.editor=prepare.text;filled.fake.state.submit.disabled=false;

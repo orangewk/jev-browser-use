@@ -182,6 +182,12 @@ async function testHostBrowserPolicy() {
   };
   await assert.rejects(()=>handleJevTool('jev_claim_tab',{tab_id:'9'},wrongOrigin,config,{JEV_BROWSER_ACTOR:'claude'}),/not authorized by host/);
   assert.equal(calls.at(-1)[0],'codex_finalize');
+  const rejectedCalls=[];
+  await assert.rejects(()=>handleJevTool('jev_claim_tab',{tab_id:'9'},async name=>{
+    rejectedCalls.push(name);
+    return {isError:true,content:[{type:'text',text:'Tab belongs to another session; confidential detail'}]};
+  },config,{JEV_BROWSER_ACTOR:'claude'}),e=>e.message.includes('tab claim failed: tab ownership')&&!e.message.includes('confidential'));
+  assert.deepEqual(rejectedCalls,['codex_claim_tab'],'failed claim must not continue or finalize another owner');
 }
 
 async function testActorBrowserPolicy() {
