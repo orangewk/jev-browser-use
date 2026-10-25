@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { handleXPublicTool } from '../skills/jev-browser-use/x-public.mjs';
+import { handleXPublicTool, X_PROFILE_EXPRESSION } from '../skills/jev-browser-use/x-public.mjs';
 import { browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
 
 const root = mkdtempSync(join(tmpdir(),'jev-x-public-'));
@@ -14,13 +14,16 @@ function fixture() {
   const policy={browserInstance:instance,allowedOrigins:['https://x.com'],maxSteps:30,xPosting:{account:'xi_id_room',room:directory,stateDirectory:join(directory,'state'),uploadBase:directory}};
   const config={browser:{actors:{shii:policy,claude:{allowedOrigins:['https://x.com'],maxSteps:30}}}};
   const state={url:'https://x.com/home',account:'/xi_id_room',editor:null,submit:null,images:0,contextLinks:[],links:[],toastLinks:[],posts:[]};
-  const fake={state,instance,publishes:0,unknown:false,noContext:false};
+  const fake={state,instance,publishes:0,unknown:false,noContext:false,profile:{open:false,fields:{name:'シー',bio:'',location:'',website:''},images:[],buttons:['保存']},waits:0,typed:0,saves:0};
   const result=value=>({content:[{type:'text',text:typeof value==='string'?value:JSON.stringify(value)}]});
   const call=async(name,args)=>{
+    if(fake.failTool===name) return {isError:true,content:[{type:'text',text:'Timeout: test-only sensitive detail must not be exposed'}]};
+    if(name==='codex_bring_to_front')return result('foreground');
     if(name==='codex_get_info')return result({bridge:{selectedBrowser:{instance_id:fake.instance}}});
     if(name==='codex_get_url')return result(state.url);
-    if(name==='codex_evaluate')return result({result:{type:'object',value:state}});
+    if(name==='codex_evaluate')return result({result:{type:'object',value:args.expression===X_PROFILE_EXPRESSION?fake.profile:state}});
     if(name==='codex_navigate'){
+      if(args.url.endsWith('/settings/profile')){state.url=args.url;fake.profile.open=true;return result('profile');}
       if(!args.url.includes('/compose/')) {fake.target=args.url;state.url=args.url;return result('target');}
       state.url=args.url; state.editor='\n'; state.images=0; state.toastLinks=[]; state.submit={testId:'tweetButton',disabled:true};
       const u=new URL(args.url); const id=u.searchParams.get('in_reply_to'); const quote=u.searchParams.get('attachment_url');
@@ -28,10 +31,12 @@ function fixture() {
       if(fake.contextButtonsOnly && id){state.contextLinks=[];state.contextButtons=['返信先: @otherさん'];}
       return result('navigated');
     }
-    if(name==='codex_wait_for_element')return result('ready');
-    if(name==='codex_cua_type'){state.editor=args.text;state.submit.disabled=false;return result('typed');}
-    if(name==='codex_file_input'){state.images=args.files.length;state.submit.disabled=false;return result('attached');}
+    if(name==='codex_wait_for_element'){fake.waits++; if(fake.waits<=(fake.slowWaits||0))return {isError:true,content:[{type:'text',text:'Timeout: not found after 5000ms'}]};return result('ready');}
+    if(name==='codex_cua_type'){fake.typed++;state.editor=args.text;state.submit.disabled=false;return result('typed');}
+    if(name==='codex_fill'){const k={displayName:'name',description:'bio',location:'location',url:'website'}[args.selector.match(/name="([^"]+)/)[1]];fake.profile.fields[k]=args.value;return result('filled');}
+    if(name==='codex_file_input'){if(fake.profile.open){fake.crop=true;return result('crop');}state.images=args.files.length;state.submit.disabled=false;return result('attached');}
     if(name==='codex_click'){
+      if(args.selector.includes('Profile_Save_Button')){fake.saves++;fake.profile.open=false;return result('saved');}
       if(args.selector.includes('retweet'))return result('quote menu');
       if(args.selector.includes('tweetTextarea'))return result('focused');
       fake.publishes++;
@@ -39,8 +44,8 @@ function fixture() {
       state.toastLinks=['https://x.com/xi_id_room/status/200'];state.editor=null;state.submit=null;
       return result('clicked');
     }
-    if(name==='codex_dom_snapshot')return result({nodes:[{name:{value:'引用する'},role:{value:'menuitem'},backendDOMNodeId:42}]});
-    if(name==='codex_dom_click'){state.url='https://x.com/compose/post';state.editor='\n';state.submit={testId:'tweetButton',disabled:true};state.contextLinks=fake.contextButtonsOnly?[]:[fake.target];state.contextButtons=['other\n@other\n1時間\n引用される本文'];return result('quoted');}
+    if(name==='codex_dom_snapshot')return result({nodes:[{name:{value:fake.crop?'適用':'引用する'},role:{value:fake.crop?'button':'menuitem'},backendDOMNodeId:42}]});
+    if(name==='codex_dom_click'){if(fake.crop){fake.crop=false;fake.profile.images=['blob:preview'];return result('cropped');}state.url='https://x.com/compose/post';state.editor='\n';state.submit={testId:'tweetButton',disabled:true};state.contextLinks=fake.contextButtonsOnly?[]:[fake.target];state.contextButtons=['other\n@other\n1時間\n引用される本文'];return result('quoted');}
     if(name==='codex_screenshot')return{content:[{type:'image',mimeType:'image/jpeg',data:'aW1hZ2U='}]};
     throw new Error(`Unexpected fake tool ${name}`);
   };
@@ -91,6 +96,29 @@ try {
   const image=fixture();writeFileSync(join(image.directory,'pixel.png'),Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ1sAAAAASUVORK5CYII=','base64'));
   assert.equal(payload(await image.run('jev_x_prepare',{request_id:'image',text:'',images:['pixel.png']})).images,1);
   const viewed=await image.run('jev_x_view',{image:true});assert.equal(viewed.content.at(-1).type,'image');
+  const slow=fixture();slow.fake.slowWaits=2;await slow.run('jev_x_prepare',prepare);assert.equal(slow.fake.waits,3,'slow SPA render retries only observation');
+  const retry=fixture();retry.fake.failTool='codex_wait_for_element';
+  await assert.rejects(()=>retry.run('jev_x_prepare',prepare),/at codex_wait_for_element: timeout$/);
+  retry.fake.failTool=null;await retry.run('jev_x_prepare',prepare);assert.equal(retry.fake.typed,1,'preparing can resume with same intent');
+  const filled=fixture();filled.fake.failTool='codex_cua_type';
+  await assert.rejects(()=>filled.run('jev_x_prepare',prepare),e=>e.message.endsWith('codex_cua_type: timeout')&&!e.message.includes('sensitive'));
+  filled.fake.failTool=null;filled.fake.state.editor=prepare.text;filled.fake.state.submit.disabled=false;
+  await filled.run('jev_x_prepare',prepare);assert.equal(filled.fake.typed,0,'already filled draft is not typed twice');
+  const profile=fixture();profile.policy.xPosting.profileEditing=true;
+  await profile.run('jev_x_profile',{action:'open'});
+  const edit=payload(await profile.run('jev_x_profile',{action:'fill',fields:{name:'シー',bio:'私の紹介'}}));
+  await assert.rejects(()=>profile.run('jev_x_profile',{action:'fill',fields:{password:'no'}}),/Invalid public profile/);
+  await assert.rejects(()=>profile.run('jev_x_profile',{action:'fill',fields:{website:'javascript:bad'}}),/http/);
+  await assert.rejects(()=>profile.run('jev_x_profile',{action:'save',revision:'stale'}),/changed/);
+  assert.equal(profile.fake.saves,0);
+  assert.equal(payload(await profile.run('jev_x_profile',{action:'save',revision:edit.revision})).status,'saved');assert.equal(profile.fake.saves,1);
+  const avatar=fixture();avatar.policy.xPosting.profileEditing=true;await avatar.run('jev_x_profile',{action:'open'});
+  writeFileSync(join(avatar.directory,'avatar.png'),readFileSync(join(image.directory,'pixel.png')));
+  assert.equal(payload(await avatar.run('jev_x_profile',{action:'image',target:'avatar',path:'avatar.png'})).status,'inspect_crop');
+  const crop=payload(await avatar.run('jev_x_profile',{action:'apply_image'}));assert.equal(crop.images.length,1);
+  assert.equal(payload(await avatar.run('jev_x_profile',{action:'save',revision:crop.revision})).status,'saved');
+  await assert.rejects(()=>avatar.run('jev_x_prepare',prepare),/profile editor/);
+  await assert.rejects(()=>fixture().run('jev_x_profile',{action:'open'}),/not configured/);
   const invalid=fixture();writeFileSync(join(invalid.directory,'not-image.png'),'not an image');
   await assert.rejects(()=>invalid.run('jev_x_prepare',{...prepare,images:['not-image.png']}),/Only PNG/);
   writeFileSync(join(root,'outside.png'),readFileSync(join(image.directory,'pixel.png')));

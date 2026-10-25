@@ -47,6 +47,18 @@ before clicking. Images must be actual PNG/JPEG/GIF/WebP files inside the
 configured resident room and fit the bridge's 10 MB limit. Shared or private
 account controls are not included in this public-post capability.
 
+A failed `preparing` request can be prepared again with the same ID/content.
+It resumes without retyping an already matching draft and preserves unrelated
+drafts. The foreground composer gets up to 30 seconds of bounded read-only
+readiness checks. Errors identify the bridge operation and a safe category.
+
+With the additional explicit `xPosting.profileEditing: true` host setting,
+`jev_x_profile` edits public name, bio, location text, website, avatar and
+banner. XI-ID chooses the content. Open, fill or attach an image, inspect the
+crop before apply_image, then save with the exact revision from the latest
+view. Verify the public profile afterward. Handle, birthday, authentication,
+privacy and payment controls remain outside this capability.
+
 Claude Code must register `claude-mcp-server.mjs` as an MCP stdio command and
 set `CODEX_BROWSER_BRIDGE_COMMAND` when the bridge executable is not on PATH.
 The wrapper exposes only tab listing, tab claiming, and a bounded Jev run. It
