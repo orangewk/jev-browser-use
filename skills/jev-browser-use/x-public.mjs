@@ -38,7 +38,8 @@ export const X_STATE_EXPRESSION = `(() => {
   return { url: location.href, account: profile?.getAttribute('href') || null,
     editor: editor ? editor.innerText : null, submit: submit ? {testId:submit.dataset.testid,disabled:submit.disabled || submit.getAttribute('aria-disabled') === 'true'} : null,
     images: scope.querySelectorAll('[data-testid="attachments"] [data-testid="attachment"], [data-testid="attachments"] [data-testid="mediaPreview"]').length,
-    contextLinks: statusLinks(scope), links: statusLinks(document),
+    contextLinks: statusLinks(scope), contextButtons: Array.from(scope.querySelectorAll('button, [role="button"]')).map(b=>b.innerText || '').filter(t=>t.includes('@')),
+    links: statusLinks(document),
     toastLinks: Array.from(document.querySelectorAll('[data-testid="toast"] a[href*="/status/"]')).map(a => a.href),
     posts: Array.from(document.querySelectorAll('article[data-testid="tweet"]')).map(a => ({links:statusLinks(a), text:a.querySelector('[data-testid="tweetText"]')?.innerText || ''})) };
 })()`;
@@ -71,7 +72,7 @@ function ownPost(url, account) {
 }
 function statusId(url) {
   const u = new URL(url);
-  const match = /^\/[^/]+\/status\/([0-9]+)\/?$/.exec(u.pathname);
+  const match = /^\/[a-zA-Z0-9_]+\/status\/([0-9]+)\/?$/.exec(u.pathname);
   if (u.origin !== 'https://x.com' || !match || u.search || u.hash) throw new Error('target_url must be an exact public X post URL');
   return match[1];
 }
@@ -102,6 +103,16 @@ function findPosted(state, record, x) {
   const newLink = url => ownPost(url, x.account) && !record.beforeLinks.includes(url);
   return state.toastLinks.find(newLink) || state.posts.find(post => hash(post.text) === record.textHash && post.links.some(newLink))?.links.find(newLink) || null;
 }
+function contextSignal(state, record) {
+  if (!record.targetId) return '';
+  const link = state.contextLinks.find(url=>{try{return statusId(url)===record.targetId;}catch{return false;}});
+  if (link) return link;
+  const author = new URL(record.targetUrl).pathname.split('/')[1].toLowerCase();
+  const button = (state.contextButtons || []).find(t=>new RegExp(`@${author}(?:[^a-z0-9_]|$)`,'i').test(t)
+    && (record.kind==='reply' ? /返信先|Replying to/i.test(t) : !/返信先|Replying to/i.test(t)));
+  if (record.kind==='reply' && new URL(state.url).searchParams.get('in_reply_to')!==record.targetId) return null;
+  return button || null;
+}
 
 export async function handleXPublicTool(name, args, callTool, config, env, { wait = sleep } = {}) {
   const x = capability(config, env);
@@ -129,16 +140,29 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
       if (old.intentHash !== intentHash) throw new Error('request_id already belongs to different content');
       return textResult({ status: old.status, request_id: id, url: old.url || null, message: 'Existing request preserved; inspect its status rather than preparing again.' });
     }
-    const record = { request_id: id, tabId, kind, targetId, intentHash, textHash: hash(args.text), imageCount: images.length, images, status: 'preparing', beforeLinks: state.links.filter(url => ownPost(url, x.account)), at: new Date().toISOString() };
+    const record = { request_id: id, tabId, kind, targetId, targetUrl:args.target_url || null, intentHash, textHash: hash(args.text), imageCount: images.length, images, status: 'preparing', beforeLinks: state.links.filter(url => ownPost(url, x.account)), at: new Date().toISOString() };
     writeFileSync(file, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
     const url = new URL('https://x.com/compose/post');
     if (kind === 'reply') url.searchParams.set('in_reply_to', targetId);
-    if (kind === 'quote') url.searchParams.set('attachment_url', args.target_url);
-    text(await callTool('codex_navigate', { tab_id: tabId, url: url.href }));
+    if (kind === 'quote') {
+      // X ignores attachment_url on a direct composer URL. Open the observed post's quote menu.
+      text(await callTool('codex_navigate', {tab_id:tabId,url:args.target_url}));
+      const article = `article[data-testid="tweet"]:has(a[href="${new URL(args.target_url).pathname}"])`;
+      text(await callTool('codex_wait_for_element',{tab_id:tabId,selector:article}));
+      await observe(callTool,tabId,x);
+      text(await callTool('codex_click',{tab_id:tabId,selector:`${article} :is([data-testid="retweet"],[data-testid="unretweet"])`}));
+      const menu = JSON.parse(text(await callTool('codex_dom_snapshot',{tab_id:tabId})));
+      const entries=(menu.nodes || []).filter(n=>['引用する','引用','Quote','Quote post'].includes(n.name?.value) && !/text/i.test(n.role?.value || '') && Number.isInteger(n.backendDOMNodeId));
+      if(entries.length!==1) throw new Error('Quote menu entry is not unambiguous');
+      text(await callTool('codex_dom_click',{tab_id:tabId,node_id:String(entries[0].backendDOMNodeId)}));
+    } else {
+      text(await callTool('codex_navigate', { tab_id: tabId, url: url.href }));
+    }
     text(await callTool('codex_wait_for_element', { tab_id: tabId, selector: '[data-testid="tweetTextarea_0"]' }));
-    const ready = await observe(callTool, tabId, x);
+    let ready;
+    for(let i=0;i<16;i++) { ready=await observe(callTool,tabId,x); if(!targetId || contextSignal(ready,record)) break; await wait(500); }
     if (ready.editor === null || ready.editor.trim()) throw new Error('Empty X composer was not found');
-    if (targetId && !ready.contextLinks.some(url => { try { return statusId(url) === targetId; } catch { return false; } })) throw new Error('Reply/quote context was not confirmed; nothing will be published');
+    if (targetId && !contextSignal(ready,record)) throw new Error('Reply/quote context was not confirmed; nothing will be published');
     text(await callTool('codex_click', { tab_id: tabId, selector: '[data-testid="tweetTextarea_0"]' }));
     if (args.text) text(await callTool('codex_cua_type', { tab_id: tabId, text: args.text }));
     if (images.length) text(await callTool('codex_file_input', { tab_id: tabId, selector: 'input[type="file"][data-testid="fileInput"]', files: images.map(image => image.path) }));
@@ -150,6 +174,7 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
     }
     if (preview.editor !== args.text || preview.images !== images.length || !preview.submit || preview.submit.disabled) throw new Error('X composer or attachments do not match the requested draft');
     record.status = 'prepared';
+    record.contextHash = hash(contextSignal(preview,record) || '');
     record.submit = preview.submit.testId;
     record.composeUrl = preview.url;
     writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
@@ -166,7 +191,7 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
   if (name !== 'jev_x_publish') throw new Error('Unknown X tool');
   if (record.status !== 'prepared') return textResult({ status: record.status, request_id: id, message: 'Not publishing again. Inspect existing posts.' });
   if (state.url !== record.composeUrl || hash(state.editor || '') !== record.textHash || state.images !== record.imageCount || !state.submit || state.submit.disabled || state.submit.testId !== record.submit) throw new Error('Draft changed; nothing was published');
-  if (record.targetId && !state.contextLinks.some(url => { try { return statusId(url) === record.targetId; } catch { return false; } })) throw new Error('Reply/quote context changed');
+  if (record.targetId && (!contextSignal(state,record) || hash(contextSignal(state,record)) !== record.contextHash)) throw new Error('Reply/quote context changed');
   if (record.images.some(image => hash(readFileSync(localPath(image.path))) !== image.sha256)) throw new Error('An image changed after preparation');
   // Durable exclusive marker precedes the external effect. Uncertainty never replays a click.
   writeFileSync(file + '.publish', new Date().toISOString(), { flag: 'wx', mode: 0o600 });
