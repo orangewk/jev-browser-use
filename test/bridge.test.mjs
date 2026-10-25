@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { createActorSession, createSession, availableActions, discoverActions, resolveBrowserPolicy, run } from '../skills/jev-browser-use/bridge.mjs';
 import { createClaudeCodeSession } from '../skills/jev-browser-use/claude-adapter.mjs';
 import { BrowserMcpClient, browserBridgeArgs, handleJevTool } from '../skills/jev-browser-use/claude-mcp-server.mjs';
@@ -143,12 +144,13 @@ async function testAuthenticationAndMessagingControls() {
 
 async function testClaudeRequestTimeout() {
   const client=Object.create(BrowserMcpClient.prototype);
-  client.child={stdin:{write(){}}};
-  client.pending=new Map();
+  const pending=new Map();
+  client.child={stdin:{write(){}},pending,kill(){}};
   client.nextId=1;
   client.requestTimeoutMs=5;
   await assert.rejects(()=>client.request('tools/list',{}),/timed out/);
-  assert.equal(client.pending.size,0);
+  assert.equal(pending.size,0);
+  assert.equal(client.child,null);
 }
 
 async function testHostBrowserPolicy() {
@@ -248,8 +250,8 @@ async function testClaudeFinalizesRun() {
 
 async function testWindowsProfilePaths() {
   const env={PROGRAMFILES:'C:\\Program Files',LOCALAPPDATA:'C:\\Users\\me\\AppData\\Local'};
-  assert.equal(chromeCandidates(env)[0],'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
-  assert.equal(profileDirectory(env),'C:\\Users\\me\\AppData\\Local\\JevBrowser\\User Data');
+  assert.equal(chromeCandidates(env)[0],join(env.PROGRAMFILES,'Google','Chrome','Application','chrome.exe'));
+  assert.equal(profileDirectory(env),join(env.LOCALAPPDATA,'JevBrowser','User Data'));
   assert.equal(profileDirectory({...env,JEV_BROWSER_PROFILE_DIR:'D:\\Browser'}),'D:\\Browser');
 }
 

@@ -40,7 +40,7 @@ export function createClaudeCodeTab({tabId,callTool}) {
       const nodes = parseAxTree(raw);
       nodeIds = nodes.map(node => String(node.backendId));
       const lines = nodes.map((node,index) => `${index} ${node.role} Description: ${node.name}`);
-      return `Browser tab: Claude bridge URL: "${url.trim()}".\n${lines.join('\n')}`;
+      return `Browser tab: Browser bridge URL: "${url.trim()}".\n${lines.join('\n')}`;
     },
     async click(index) {
       const nodeId = nodeIds[index];

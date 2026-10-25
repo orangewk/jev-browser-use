@@ -30,6 +30,23 @@ The user configuration works across project directories. The helper first reads 
 
 ## Claude Code transport
 
+### XI-ID public X capability
+
+When the host config explicitly enables `browser.actors.shii.xPosting`, XI-ID
+uses `jev_x_view` (optionally with a real image), `jev_x_prepare`,
+`jev_x_publish`, and `jev_x_status` for its own public X account. XI-ID is the
+host: it chooses the text, recipient and timing. This configured public-post
+scope does not require orange to approve each post. Keep the same request ID
+for one intent; an unknown publishing result must be inspected, never retried
+under a new request ID. Jev continues to handle mechanical navigation only.
+
+This capability requires bridge v2 and the exact `browserInstance` observed
+for the dedicated browser. No fastest-pipe fallback is used. The tool checks
+the X account immediately before publishing and preserves an exclusive marker
+before clicking. Images must be actual PNG/JPEG/GIF/WebP files inside the
+configured resident room and fit the bridge's 10 MB limit. Shared or private
+account controls are not included in this public-post capability.
+
 Claude Code must register `claude-mcp-server.mjs` as an MCP stdio command and
 set `CODEX_BROWSER_BRIDGE_COMMAND` when the bridge executable is not on PATH.
 The wrapper exposes only tab listing, tab claiming, and a bounded Jev run. It
