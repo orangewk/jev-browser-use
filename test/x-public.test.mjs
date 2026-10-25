@@ -14,14 +14,17 @@ function fixture() {
   const policy={browserInstance:instance,allowedOrigins:['https://x.com'],maxSteps:30,xPosting:{account:'xi_id_room',room:directory,stateDirectory:join(directory,'state'),uploadBase:directory}};
   const config={browser:{actors:{shii:policy,claude:{allowedOrigins:['https://x.com'],maxSteps:30}}}};
   const state={url:'https://x.com/home',account:'/xi_id_room',editor:null,submit:null,images:0,contextLinks:[],links:[],toastLinks:[],posts:[]};
-  const fake={state,instance,publishes:0,unknown:false,noContext:false,profile:{open:false,fields:{name:'シー',bio:'',location:'',website:''},images:[],buttons:['保存']},waits:0,typed:0,saves:0};
+  const fake={state,instance,publishes:0,unknown:false,noContext:false,profile:{open:false,fields:{name:'シー',bio:'',location:'',website:''},images:[],buttons:['保存']},waits:0,typed:0,uploads:0,saves:0};
   const result=value=>({content:[{type:'text',text:typeof value==='string'?value:JSON.stringify(value)}]});
   const call=async(name,args)=>{
     if(fake.failTool===name) return {isError:true,content:[{type:'text',text:fake.failDetail || 'Timeout: test-only sensitive detail must not be exposed'}]};
     if(name==='codex_bring_to_front')return result('foreground');
     if(name==='codex_get_info')return result({bridge:{selectedBrowser:{instance_id:fake.instance}}});
     if(name==='codex_get_url')return result(state.url);
-    if(name==='codex_evaluate')return result({result:{type:'object',value:args.expression===X_PROFILE_EXPRESSION?fake.profile:state}});
+    if(name==='codex_evaluate'){
+      const observed=fake.uploadRemaining>0?(fake.uploadRemaining--,{...state,images:0,submit:{...state.submit,disabled:true}}):state;
+      return result({result:{type:'object',value:args.expression===X_PROFILE_EXPRESSION?fake.profile:observed}});
+    }
     if(name==='codex_navigate'){
       if(args.url.endsWith('/settings/profile')){state.url=args.url;fake.profile.open=true;return result('profile');}
       if(!args.url.includes('/compose/')) {fake.target=args.url;state.url=args.url;return result('target');}
@@ -34,7 +37,7 @@ function fixture() {
     if(name==='codex_wait_for_element'){fake.waits++; if(fake.waits<=(fake.slowWaits||0))return {isError:true,content:[{type:'text',text:'Timeout: not found after 5000ms'}]};return result('ready');}
     if(name==='codex_cua_type'){fake.typed++;state.editor=args.text;state.submit.disabled=false;return result('typed');}
     if(name==='codex_fill'){const k={displayName:'name',description:'bio',location:'location',url:'website'}[args.selector.match(/name="([^"]+)/)[1]];fake.profile.fields[k]=args.value;return result('filled');}
-    if(name==='codex_file_input'){if(fake.profile.open){fake.crop=true;return result('crop');}state.images=args.files.length;state.submit.disabled=false;return result('attached');}
+    if(name==='codex_file_input'){if(fake.profile.open){fake.crop=true;return result('crop');}fake.uploads++;fake.uploadRemaining=fake.uploadDelay || 0;state.images=args.files.length;state.submit.disabled=false;return result('attached');}
     if(name==='codex_click'){
       if(args.selector.includes('Profile_Save_Button')){fake.saves++;fake.profile.open=false;return result('saved');}
       if(args.selector.includes('retweet'))return result('quote menu');
@@ -95,6 +98,14 @@ try {
   await assert.rejects(()=>context.run('jev_x_prepare',{...prepare,kind:'reply',target_url:'https://x.com/other/status/100'}),/context was not confirmed/);
   const image=fixture();writeFileSync(join(image.directory,'pixel.png'),Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ1sAAAAASUVORK5CYII=','base64'));
   assert.equal(payload(await image.run('jev_x_prepare',{request_id:'image',text:'',images:['pixel.png']})).images,1);
+  const delayed=fixture();writeFileSync(join(delayed.directory,'pixel.png'),readFileSync(join(image.directory,'pixel.png')));
+  delayed.fake.uploadDelay=64;
+  const delayedDraft={request_id:'delayed-image',text:'slow image',images:['pixel.png']};
+  assert.equal(payload(await delayed.run('jev_x_prepare',delayedDraft)).status,'preparing');
+  assert.equal(payload(await delayed.run('jev_x_publish',{request_id:'delayed-image'})).needs_prepare,true);
+  assert.equal(payload(await delayed.run('jev_x_status',{request_id:'delayed-image'})).needs_prepare,true);
+  assert.equal(payload(await delayed.run('jev_x_prepare',delayedDraft)).status,'prepared');
+  assert.equal(delayed.fake.typed,1);assert.equal(delayed.fake.uploads,1);assert.equal(delayed.fake.publishes,0);
   const viewed=await image.run('jev_x_view',{image:true});assert.equal(viewed.content.at(-1).type,'image');
   const slow=fixture();slow.fake.slowWaits=2;await slow.run('jev_x_prepare',prepare);assert.equal(slow.fake.waits,3,'slow SPA render retries only observation');
   const retry=fixture();retry.fake.failTool='codex_wait_for_element';

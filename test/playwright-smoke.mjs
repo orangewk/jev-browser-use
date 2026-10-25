@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp,mkdir,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
-import {createPlaywrightTab} from '../skills/jev-browser-use/playwright-adapter.mjs';
+import {createPlaywrightTab,createPlaywrightXBrowser} from '../skills/jev-browser-use/playwright-adapter.mjs';
+import {handleXBrowserTool,X_STATE_EXPRESSION} from '../skills/jev-browser-use/x-public.mjs';
 
 const root=await mkdtemp(join(tmpdir(),'jev-headless-smoke-'));
 const server=createServer((req,res)=>{
@@ -37,6 +38,17 @@ try {
   await tab.close();await context.close();context=null;
   context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,channel:'chromium',chromiumSandbox:true,env:{...process.env,DISPLAY:'',WAYLAND_DISPLAY:''}});
   assert.ok((await context.cookies(origin)).some(c=>c.name==='synthetic'),'dedicated authentication state survives restart');
+  const xPage=await context.newPage();
+  await xPage.route('**/*',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<a data-testid="AppTabBar_Profile_Link" href="/xi_id_room">Own account</a><div role="dialog"><div role="textbox" contenteditable="true" data-testid="tweetTextarea_0"></div><div data-testid="attachments"></div><input type="file" data-testid="fileInput" onchange="setTimeout(()=>{const image=document.createElement('img');image.onload=()=>document.querySelector('[data-testid=tweetButton]').disabled=false;document.querySelector('[data-testid=attachments]').append(image);const reader=new FileReader();reader.onload=()=>image.src=reader.result;reader.readAsDataURL(this.files[0]);},8000)"><button data-testid="tweetButton" disabled>Post</button></div>`}));
+  await xPage.goto('https://x.com/home');
+  await writeFile(join(root,'pixel.png'),Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ1sAAAAASUVORK5CYII=','base64'));
+  const xBrowser=await createPlaywrightXBrowser(xPage,{identity:'synthetic-browser'});
+  const prepared=await handleXBrowserTool('jev_x_prepare',{tab_id:'synthetic',request_id:'delayed',text:'synthetic image draft',images:['pixel.png']},xBrowser,{account:'xi_id_room',instance:'synthetic-browser',room:root,uploadBase:root,stateDirectory:join(root,'requests'),persistDraft:true});
+  assert.equal(JSON.parse(prepared.content[0].text).status,'prepared');
+  assert.equal((await xPage.evaluate(X_STATE_EXPRESSION)).images,1,'plain image preview without legacy test IDs is counted');
+  await xPage.locator('[data-testid=attachments]').evaluate(el=>{const card=document.createElement('div');card.dataset.testid='attachment';const inner=document.createElement('div');inner.dataset.testid='mediaPreview';inner.append(el.querySelector('img'));card.append(inner);el.append(card);});
+  assert.equal((await xPage.evaluate(X_STATE_EXPRESSION)).images,1,'nested legacy wrappers do not count the same image twice');
+  assert.equal(await readFile(join(root,'requests/delayed.json.publish')).then(()=>true,()=>false),false);
   const source=await readFile(new URL('../skills/jev-browser-use/playwright-adapter.mjs',import.meta.url),'utf8');
   assert.ok(!/\.bringToFront\s*\(|from\s*['"](?:node:)?child_process|cua\./.test(source),'adapter has no desktop control dependency');
   console.log('PASS real headless Chromium: AX/click/scroll/input/upload/image/profile persistence; local fixture only; model calls 0; desktop calls 0');

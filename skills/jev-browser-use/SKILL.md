@@ -64,8 +64,11 @@ account controls are not included in this public-post capability.
 
 A failed `preparing` request can be prepared again with the same ID/content.
 It resumes without retyping an already matching draft and preserves unrelated
-drafts. The foreground composer gets up to 30 seconds of bounded read-only
-readiness checks. Errors identify the bridge operation and a safe category.
+drafts. The composer and image upload each get up to 30 seconds of bounded
+read-only readiness checks. If an upload is still pending, `preparing` with
+`needs_prepare: true` preserves it. Inspect and prepare the same ID/content
+again after loading; matching draft text and files are not added twice.
+Errors identify the bridge operation and a safe category.
 
 With the additional explicit `xPosting.profileEditing: true` host setting,
 `jev_x_profile` edits public name, bio, location text, website, avatar and
