@@ -122,7 +122,7 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
     const result = await transport(tool, input);
     if (result?.isError) {
       const detail = result.content?.filter(c=>c.type==='text').map(c=>c.text).join(' ') || '';
-      const category = /timeout|timed out|not found after/i.test(detail) ? 'timeout' : /foreground|background/i.test(detail) ? 'foreground' : /owned|ownership|session|claim/i.test(detail) ? 'tab ownership' : /disconnect|connect|pipe/i.test(detail) ? 'connection' : 'bridge rejected operation';
+      const category = /timeout|timed out|not found after/i.test(detail) ? 'timeout' : /foreground|background/i.test(detail) ? 'foreground' : /owned|ownership|another.*session|already part of/i.test(detail) ? 'tab ownership' : /session.*invalid|invalid.*session|session.*not found|no session/i.test(detail) ? 'CDP session invalid; outcome may be unknown' : /disconnect|connect|pipe/i.test(detail) ? 'connection' : 'bridge rejected operation';
       throw new Error(`X browser transport failed at ${tool}: ${category}`);
     }
     return result;
