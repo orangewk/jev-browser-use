@@ -21,22 +21,26 @@ function fixture() {
     if(name==='codex_get_url')return result(state.url);
     if(name==='codex_evaluate')return result({result:{type:'object',value:state}});
     if(name==='codex_navigate'){
+      if(!args.url.includes('/compose/')) {fake.target=args.url;state.url=args.url;return result('target');}
       state.url=args.url; state.editor='\n'; state.images=0; state.toastLinks=[]; state.submit={testId:'tweetButton',disabled:true};
       const u=new URL(args.url); const id=u.searchParams.get('in_reply_to'); const quote=u.searchParams.get('attachment_url');
       state.contextLinks=fake.noContext?[]:id?[`https://x.com/other/status/${id}`]:quote?[quote]:[];
+      if(fake.contextButtonsOnly && id){state.contextLinks=[];state.contextButtons=['返信先: @otherさん'];}
       return result('navigated');
     }
     if(name==='codex_wait_for_element')return result('ready');
     if(name==='codex_cua_type'){state.editor=args.text;state.submit.disabled=false;return result('typed');}
     if(name==='codex_file_input'){state.images=args.files.length;state.submit.disabled=false;return result('attached');}
     if(name==='codex_click'){
+      if(args.selector.includes('retweet'))return result('quote menu');
       if(args.selector.includes('tweetTextarea'))return result('focused');
       fake.publishes++;
       if(fake.unknown)throw new Error('response lost');
       state.toastLinks=['https://x.com/xi_id_room/status/200'];state.editor=null;state.submit=null;
       return result('clicked');
     }
-    if(name==='codex_dom_snapshot')return result({nodes:[]});
+    if(name==='codex_dom_snapshot')return result({nodes:[{name:{value:'引用する'},role:{value:'menuitem'},backendDOMNodeId:42}]});
+    if(name==='codex_dom_click'){state.url='https://x.com/compose/post';state.editor='\n';state.submit={testId:'tweetButton',disabled:true};state.contextLinks=fake.contextButtonsOnly?[]:[fake.target];state.contextButtons=['other\n@other\n1時間\n引用される本文'];return result('quoted');}
     if(name==='codex_screenshot')return{content:[{type:'image',mimeType:'image/jpeg',data:'aW1hZ2U='}]};
     throw new Error(`Unexpected fake tool ${name}`);
   };
@@ -58,6 +62,14 @@ try {
     assert.equal(p.kind,kind);
     assert.equal(payload(await t.run('jev_x_publish',{request_id:kind})).status,'posted');
   }
+  for(const kind of ['reply','quote']){
+    const t=fixture();t.fake.contextButtonsOnly=true;
+    await t.run('jev_x_prepare',{request_id:kind,text:'公開の返事',kind,target_url:'https://x.com/other/status/100'});
+    assert.equal(payload(await t.run('jev_x_publish',{request_id:kind})).status,'posted','リンクなしの宛先ボタン表示も確認');
+  }
+  const concurrent=fixture();await concurrent.run('jev_x_prepare',prepare);
+  await Promise.allSettled([concurrent.run('jev_x_publish',{request_id:'one'}),concurrent.run('jev_x_publish',{request_id:'one'})]);
+  assert.equal(concurrent.fake.publishes,1,'同時呼び出しも一回だけ');
   const mismatch=fixture(); mismatch.fake.state.account='/orangewk';
   await assert.rejects(()=>mismatch.run('jev_x_prepare',prepare),/account mismatch/);
   assert.equal(mismatch.fake.publishes,0);
@@ -81,7 +93,8 @@ try {
   const viewed=await image.run('jev_x_view',{image:true});assert.equal(viewed.content.at(-1).type,'image');
   const invalid=fixture();writeFileSync(join(invalid.directory,'not-image.png'),'not an image');
   await assert.rejects(()=>invalid.run('jev_x_prepare',{...prepare,images:['not-image.png']}),/Only PNG/);
-  await assert.rejects(()=>invalid.run('jev_x_prepare',{...prepare,images:[join(root,'outside.png')]}));
+  writeFileSync(join(root,'outside.png'),readFileSync(join(image.directory,'pixel.png')));
+  await assert.rejects(()=>invalid.run('jev_x_prepare',{...prepare,images:[join(root,'outside.png')]}),/inside the resident room/);
   await assert.rejects(()=>handleXPublicTool('jev_x_prepare',{tab_id:'7',...prepare},invalid.call,invalid.config,{JEV_BROWSER_ACTOR:'claude'}),/not configured/);
   const args=browserBridgeArgs('bridge.exe',()=>{throw new Error('must not choose fastest pipe');},env,f.config);
   assert.ok(args.includes(instance));assert.ok(!args.includes('--pipe'));assert.ok(args.includes('--upload-base'));
