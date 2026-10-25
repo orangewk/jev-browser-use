@@ -38,7 +38,7 @@ export const X_STATE_EXPRESSION = `(() => {
   const statusLinks = el => Array.from(el.querySelectorAll('a[href*="/status/"]')).map(a => a.href);
   return { url: location.href, account: profile?.getAttribute('href') || null,
     editor: editor ? editor.innerText : null, submit: submit ? {testId:submit.dataset.testid,disabled:submit.disabled || submit.getAttribute('aria-disabled') === 'true'} : null,
-    images: scope.querySelectorAll('[data-testid="attachments"] [data-testid="attachment"], [data-testid="attachments"] [data-testid="mediaPreview"]').length,
+    images: scope.querySelectorAll('[data-testid="attachments"] img').length || scope.querySelectorAll('[data-testid="attachments"] [data-testid="attachment"], [data-testid="attachments"] [data-testid="mediaPreview"]').length,
     contextLinks: statusLinks(scope), contextButtons: Array.from(scope.querySelectorAll('button, [role="button"]')).map(b=>b.innerText || '').filter(t=>t.includes('@')),
     links: statusLinks(document),
     toastLinks: Array.from(document.querySelectorAll('[data-testid="toast"] a[href*="/status/"]')).map(a => a.href),
@@ -183,7 +183,7 @@ export async function handleXBrowserTool(name,args,browser,x,{wait=sleep}={}) {
       previous=restore?{...old,status:'preparing',tabId,browserInstance:x.instance}:old;
     }
     if (previous && previous.tabId!==tabId) throw new Error('This request belongs to another tab');
-    const resumeFilled = previous && state.editor===args.text && state.images===images.length && (!targetId || contextSignal(state,previous));
+    const resumeFilled = previous && state.editor===args.text && state.images<=images.length && (!previous.composeUrl || previous.composeUrl===state.url) && (!targetId || contextSignal(state,previous));
     if (state.editor?.trim() && !resumeFilled) throw new Error('An existing draft is open; preserve it instead of overwriting it');
     const record = previous || { request_id: id, tabId, kind, targetId, targetUrl:args.target_url || null, intentHash, textHash: hash(args.text), imageCount: images.length, images, status: 'preparing', beforeLinks: state.links.filter(url => ownPost(url, x.account)), at: new Date().toISOString() };
     if(x.persistDraft){record.browserInstance=x.instance;record.draft={text:args.text,kind,target_url:args.target_url || null,images:args.images || []};}
@@ -217,12 +217,18 @@ export async function handleXBrowserTool(name,args,browser,x,{wait=sleep}={}) {
     if (images.length) await browser.files({ tab_id: tabId, selector: '[role="dialog"] input[type="file"][data-testid="fileInput"]', files: images.map(image => image.path) });
     }
     let preview;
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 60; i++) {
       preview = await observe(browser, tabId, x);
       if (preview.editor === args.text && preview.images === images.length && preview.submit && !preview.submit.disabled) break;
       await wait(500);
     }
-    if (preview.editor !== args.text || preview.images !== images.length || !preview.submit || preview.submit.disabled) throw new Error('X composer or attachments do not match the requested draft');
+    if (preview.editor !== args.text || preview.images !== images.length || !preview.submit || preview.submit.disabled) {
+      if(images.length && preview.editor===args.text && preview.images<=images.length){
+        record.composeUrl=preview.url;writeFileSync(file,JSON.stringify(record),{mode:0o600});
+        return textResult({status:'preparing',request_id:id,needs_prepare:true,message:'Image upload is not ready. Inspect the draft and prepare again with the same request_id; no text or files will be added twice. Nothing was published.'});
+      }
+      throw new Error('X composer or attachments do not match the requested draft');
+    }
     record.status = 'prepared';
     record.contextHash = hash(contextSignal(preview,record) || '');
     record.submit = preview.submit.testId;
@@ -236,10 +242,11 @@ export async function handleXBrowserTool(name,args,browser,x,{wait=sleep}={}) {
   if (name === 'jev_x_status') {
     const url = record.status === 'unknown' ? findPosted(state, record, x) : null;
     if (url) { record.status = 'posted'; record.url = url; writeFileSync(file, JSON.stringify(record)); }
-    return textResult({ status: record.status, request_id: id, url: record.url || null, ...(x.persistDraft && ['preparing','prepared'].includes(record.status) ? {draft:record.draft,needs_prepare:record.browserInstance!==x.instance}:{}), message: record.status === 'unknown' ? 'Do not retry publishing; inspect existing posts first.' : undefined });
+    return textResult({ status: record.status, request_id: id, url: record.url || null, ...(record.status==='preparing'?{needs_prepare:true}:{}), ...(x.persistDraft && ['preparing','prepared'].includes(record.status) ? {draft:record.draft,needs_prepare:record.status==='preparing' || record.browserInstance!==x.instance}:{}), message: record.status === 'unknown' ? 'Do not retry publishing; inspect existing posts first.' : undefined });
   }
   if (name !== 'jev_x_publish') throw new Error('Unknown X tool');
   if(x.persistDraft && record.browserInstance!==x.instance && record.status==='prepared') throw new Error('Browser restarted; inspect and prepare the same draft before publishing');
+  if(record.status==='preparing')return textResult({status:'preparing',request_id:id,needs_prepare:true,message:'Nothing was published. Inspect the loading draft and prepare again with the same request_id before publishing.'});
   if (record.status !== 'prepared') return textResult({ status: record.status, request_id: id, message: 'Not publishing again. Inspect existing posts.' });
   if (state.url !== record.composeUrl || hash(state.editor || '') !== record.textHash || state.images !== record.imageCount || !state.submit || state.submit.disabled || state.submit.testId !== record.submit) throw new Error('Draft changed; nothing was published');
   if (record.targetId && (!contextSignal(state,record) || hash(contextSignal(state,record)) !== record.contextHash)) throw new Error('Reply/quote context changed');
