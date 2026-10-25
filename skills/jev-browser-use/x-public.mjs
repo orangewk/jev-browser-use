@@ -50,6 +50,8 @@ async function observe(callTool, tabId, x, { requireAccount = true } = {}) {
   if (url.origin !== 'https://x.com' || /^\/(?:settings|messages|account|i\/(?:chat|grok|flow|premium))(?:\/|$)/u.test(url.pathname)) throw new Error('This is not an authorized public X page');
   const evaluated = JSON.parse(text(await callTool('codex_evaluate', { tab_id: tabId, expression: X_STATE_EXPRESSION })));
   const state = evaluated.result?.value ?? evaluated.value ?? evaluated;
+  // X's empty contenteditable reports one placeholder newline (observed on the live composer).
+  if (state.editor === '\n') state.editor = '';
   if (state.url !== url.href) throw new Error('X tab changed during observation');
   const account = new URL(state.account || '/', 'https://x.com');
   if (requireAccount && (account.origin !== 'https://x.com' || account.pathname.replace(/^\/+|\/+$/g, '').toLowerCase() !== x.account)) throw new Error('X account mismatch or logged out; expected @xi_id_room');
