@@ -17,7 +17,7 @@ const origin=`http://127.0.0.1:${server.address().port}`;
 let context;
 try {
   await mkdir(join(root,'profile'));
-  context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,chromiumSandbox:true,env:{...process.env,DISPLAY:'',WAYLAND_DISPLAY:''}});
+  context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,channel:'chromium',chromiumSandbox:true,env:{...process.env,DISPLAY:'',WAYLAND_DISPLAY:''}});
   const page=await context.newPage();await page.goto(origin);
   const tab=await createPlaywrightTab(page,{allowedOrigins:[origin]});
   let snapshot=await tab.getAXState();
@@ -35,7 +35,7 @@ try {
   await assert.rejects(()=>tab.navigate('https://example.com/'),/not authorized/);
   await context.addCookies([{name:'synthetic',value:'test-session',url:origin,expires:Math.floor(Date.now()/1000)+3600}]);
   await tab.close();await context.close();context=null;
-  context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,chromiumSandbox:true,env:{...process.env,DISPLAY:'',WAYLAND_DISPLAY:''}});
+  context=await chromium.launchPersistentContext(join(root,'profile'),{headless:true,channel:'chromium',chromiumSandbox:true,env:{...process.env,DISPLAY:'',WAYLAND_DISPLAY:''}});
   assert.ok((await context.cookies(origin)).some(c=>c.name==='synthetic'),'dedicated authentication state survives restart');
   const source=await readFile(new URL('../skills/jev-browser-use/playwright-adapter.mjs',import.meta.url),'utf8');
   assert.ok(!/\.bringToFront\s*\(|from\s*['"](?:node:)?child_process|cua\./.test(source),'adapter has no desktop control dependency');
