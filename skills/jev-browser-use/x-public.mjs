@@ -45,14 +45,13 @@ export const X_STATE_EXPRESSION = `(() => {
     posts: Array.from(document.querySelectorAll('article[data-testid="tweet"]')).map(a => ({links:statusLinks(a), text:a.querySelector('[data-testid="tweetText"]')?.innerText || ''})) };
 })()`;
 
-async function observe(callTool, tabId, x, { requireAccount = true } = {}) {
-  const info = JSON.parse(text(await callTool('codex_get_info', {})));
-  if (info.bridge?.selectedBrowser?.instance_id !== x.instance) throw new Error('Dedicated X browser is not connected');
-  const url = new URL(text(await callTool('codex_get_url', { tab_id: tabId })).trim());
+async function observe(browser, tabId, x, { requireAccount = true } = {}) {
+  const info = await browser.info({});
+  if (info.instance !== x.instance) throw new Error('Dedicated X browser is not connected');
+  const url = new URL(await browser.url({tab_id:tabId}));
   const profilePage = x.profileEditing === true && url.pathname==='/settings/profile';
   if (url.origin !== 'https://x.com' || (!profilePage && /^\/(?:settings|messages|account|i\/(?:chat|grok|flow|premium))(?:\/|$)/u.test(url.pathname))) throw new Error('This is not an authorized public X page');
-  const evaluated = JSON.parse(text(await callTool('codex_evaluate', { tab_id: tabId, expression: X_STATE_EXPRESSION })));
-  const state = evaluated.result?.value ?? evaluated.value ?? evaluated;
+  const state = await browser.evaluate({tab_id:tabId,expression:X_STATE_EXPRESSION});
   // X's empty contenteditable reports one placeholder newline (observed on the live composer).
   if (state.editor === '\n') state.editor = '';
   if (state.url !== url.href) throw new Error('X tab changed during observation');
@@ -116,33 +115,54 @@ function contextSignal(state, record) {
   return button || null;
 }
 
-export async function handleXPublicTool(name, args, callTool, config, env, { wait = sleep } = {}) {
+export function createNativeXBrowser(callTool) {
   const transport = callTool;
   callTool = async (tool, input) => {
     const result = await transport(tool, input);
     if (result?.isError) {
       const detail = result.content?.filter(c=>c.type==='text').map(c=>c.text).join(' ') || '';
       const category = /timeout|timed out|not found after/i.test(detail) ? 'timeout' : /foreground|background/i.test(detail) ? 'foreground' : /owned|ownership|another.*session|already part of/i.test(detail) ? 'tab ownership' : /session.*invalid|invalid.*session|session.*not found|no session/i.test(detail) ? 'CDP session invalid; outcome may be unknown' : /disconnect|connect|pipe/i.test(detail) ? 'connection' : 'bridge rejected operation';
-      throw new Error(`X browser transport failed at ${tool}: ${category}`);
+      const error=new Error(`X browser transport failed at ${tool}: ${category}`);
+      if(tool==='codex_wait_for_element' && category==='timeout') error.code='BROWSER_WAIT_TIMEOUT';
+      throw error;
     }
     return result;
   };
+  const parsed = async (tool,input) => JSON.parse(text(await callTool(tool,input)));
+  const command = tool => async input => { text(await callTool(tool,input)); };
+  return {
+    info: async input => { const i=await parsed('codex_get_info',input); return {instance:i.bridge?.selectedBrowser?.instance_id}; },
+    url: async input => text(await callTool('codex_get_url',input)).trim(),
+    evaluate: async input => {const r=await parsed('codex_evaluate',input);return r.result?.value ?? r.value ?? r;},
+    snapshot: async input => {const r=await callTool('codex_dom_snapshot',input);return {...JSON.parse(text(r)),content:r.content};},
+    screenshot: input => callTool('codex_screenshot',input),
+    activate: command('codex_bring_to_front'), navigate: command('codex_navigate'),
+    waitFor: command('codex_wait_for_element'), click: command('codex_click'),
+    clickNode: command('codex_dom_click'), type: command('codex_cua_type'),
+    files: command('codex_file_input'), fill: command('codex_fill'),
+  };
+}
+
+export async function handleXPublicTool(name,args,callTool,config,env,options) {
+  return handleXBrowserTool(name,args,createNativeXBrowser(callTool),capability(config,env),options);
+}
+
+export async function handleXBrowserTool(name,args,browser,x,{wait=sleep}={}) {
   const waitFor = async selector => {
     for (let attempt=0; attempt<6; attempt++) {
-      try { return text(await callTool('codex_wait_for_element',{tab_id:args.tab_id,selector,timeout_ms:5000})); }
-      catch(error) { if(!/codex_wait_for_element: timeout$/.test(error.message) || attempt===5) throw error; }
+      try { return await browser.waitFor({tab_id:args.tab_id,selector,timeout_ms:5000}); }
+      catch(error) { if(error.code!=='BROWSER_WAIT_TIMEOUT' || attempt===5) throw error; }
     }
   };
-  const x = capability(config, env);
   const tabId = args.tab_id;
   if (typeof tabId !== 'string' || !tabId) throw new Error('tab_id is required');
-  const state = await observe(callTool, tabId, x);
-  if(name==='jev_x_profile') return handleProfile(args,callTool,x,state,waitFor,wait);
+  const state = await observe(browser, tabId, x);
+  if(name==='jev_x_profile') return handleProfile(args,browser,x,state,waitFor,wait);
   if(new URL(state.url).pathname==='/settings/profile' && name!=='jev_x_view') throw new Error('Preserve the profile editor; use another X tab for posting');
   if (name === 'jev_x_view') {
-    const snapshot = await callTool('codex_dom_snapshot', { tab_id: tabId });
+    const snapshot = await browser.snapshot( { tab_id: tabId });
     if (snapshot.isError) throw new Error('Cannot read X tab');
-    const screenshot = args.image ? await callTool('codex_screenshot', { tab_id: tabId, format: 'jpeg', quality: 75 }) : null;
+    const screenshot = args.image ? await browser.screenshot( { tab_id: tabId, format: 'jpeg', quality: 75 }) : null;
     return { content: [{ type: 'text', text: `Browser: dedicated @${x.account}; URL: ${state.url}` }, ...(snapshot.content || []), ...(screenshot?.content || [])] };
   }
   const id = identifier(args.request_id);
@@ -158,44 +178,47 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
     if (existsSync(file)) {
       const old = JSON.parse(readFileSync(file, 'utf8'));
       if (old.intentHash !== intentHash) throw new Error('request_id already belongs to different content');
-      if (old.status !== 'preparing') return textResult({ status: old.status, request_id: id, url: old.url || null, message: 'Existing request preserved; inspect its status rather than preparing again.' });
-      previous=old;
+      const restore=x.persistDraft && old.browserInstance!==x.instance && ['preparing','prepared'].includes(old.status) && !existsSync(file+'.publish');
+      if (old.status !== 'preparing' && !restore) return textResult({ status: old.status, request_id: id, url: old.url || null, message: 'Existing request preserved; inspect its status rather than preparing again.' });
+      previous=restore?{...old,status:'preparing',tabId,browserInstance:x.instance}:old;
     }
     if (previous && previous.tabId!==tabId) throw new Error('This request belongs to another tab');
     const resumeFilled = previous && state.editor===args.text && state.images===images.length && (!targetId || contextSignal(state,previous));
     if (state.editor?.trim() && !resumeFilled) throw new Error('An existing draft is open; preserve it instead of overwriting it');
     const record = previous || { request_id: id, tabId, kind, targetId, targetUrl:args.target_url || null, intentHash, textHash: hash(args.text), imageCount: images.length, images, status: 'preparing', beforeLinks: state.links.filter(url => ownPost(url, x.account)), at: new Date().toISOString() };
+    if(x.persistDraft){record.browserInstance=x.instance;record.draft={text:args.text,kind,target_url:args.target_url || null,images:args.images || []};}
     if (!previous) writeFileSync(file, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
-    text(await callTool('codex_bring_to_front',{tab_id:tabId}));
+    else if(x.persistDraft) writeFileSync(file,JSON.stringify(record),{mode:0o600});
+    await browser.activate({tab_id:tabId});
     if (!resumeFilled) {
     const url = new URL('https://x.com/compose/post');
     if (kind === 'reply') url.searchParams.set('in_reply_to', targetId);
     if (kind === 'quote') {
       // X ignores attachment_url on a direct composer URL. Open the observed post's quote menu.
-      text(await callTool('codex_navigate', {tab_id:tabId,url:args.target_url}));
+      await browser.navigate({tab_id:tabId,url:args.target_url});
       const article = `article[data-testid="tweet"]:has(a[href="${new URL(args.target_url).pathname}"])`;
       await waitFor(article);
-      await observe(callTool,tabId,x);
-      text(await callTool('codex_click',{tab_id:tabId,selector:`${article} :is([data-testid="retweet"],[data-testid="unretweet"])`}));
-      const menu = JSON.parse(text(await callTool('codex_dom_snapshot',{tab_id:tabId})));
+      await observe(browser,tabId,x);
+      await browser.click({tab_id:tabId,selector:`${article} :is([data-testid="retweet"],[data-testid="unretweet"])`});
+      const menu = await browser.snapshot({tab_id:tabId});
       const entries=(menu.nodes || []).filter(n=>['引用する','引用','Quote','Quote post'].includes(n.name?.value) && !/text/i.test(n.role?.value || '') && Number.isInteger(n.backendDOMNodeId));
       if(entries.length!==1) throw new Error('Quote menu entry is not unambiguous');
-      text(await callTool('codex_dom_click',{tab_id:tabId,node_id:String(entries[0].backendDOMNodeId)}));
+      await browser.clickNode({tab_id:tabId,node_id:String(entries[0].backendDOMNodeId)});
     } else {
-      text(await callTool('codex_navigate', { tab_id: tabId, url: url.href }));
+      await browser.navigate({ tab_id: tabId, url: url.href });
     }
     await waitFor('[role="dialog"] [data-testid="tweetTextarea_0"]');
     let ready;
-    for(let i=0;i<16;i++) { ready=await observe(callTool,tabId,x); if(!targetId || contextSignal(ready,record)) break; await wait(500); }
+    for(let i=0;i<16;i++) { ready=await observe(browser,tabId,x); if(!targetId || contextSignal(ready,record)) break; await wait(500); }
     if (ready.editor === null || ready.editor.trim()) throw new Error('Empty X composer was not found');
     if (targetId && !contextSignal(ready,record)) throw new Error('Reply/quote context was not confirmed; nothing will be published');
-    text(await callTool('codex_click', { tab_id: tabId, selector: '[role="dialog"] [data-testid="tweetTextarea_0"]' }));
-    if (args.text) text(await callTool('codex_cua_type', { tab_id: tabId, text: args.text }));
-    if (images.length) text(await callTool('codex_file_input', { tab_id: tabId, selector: '[role="dialog"] input[type="file"][data-testid="fileInput"]', files: images.map(image => image.path) }));
+    await browser.click({ tab_id: tabId, selector: '[role="dialog"] [data-testid="tweetTextarea_0"]' });
+    if (args.text) await browser.type({ tab_id: tabId, text: args.text });
+    if (images.length) await browser.files({ tab_id: tabId, selector: '[role="dialog"] input[type="file"][data-testid="fileInput"]', files: images.map(image => image.path) });
     }
     let preview;
     for (let i = 0; i < 12; i++) {
-      preview = await observe(callTool, tabId, x);
+      preview = await observe(browser, tabId, x);
       if (preview.editor === args.text && preview.images === images.length && preview.submit && !preview.submit.disabled) break;
       await wait(500);
     }
@@ -208,14 +231,15 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
     return textResult({ status: 'prepared', request_id: id, account: x.account, kind, target_url: args.target_url || null, text: preview.editor, images: preview.images, message: 'XI-ID chooses whether to publish. No orange confirmation is required.' });
   }
   const record = JSON.parse(readFileSync(file, 'utf8'));
-  if (record.tabId !== tabId) throw new Error('This request belongs to another tab');
+  if (record.tabId !== tabId && name!=='jev_x_status') throw new Error('This request belongs to another tab');
   if (record.status === 'posted') return textResult({ status: 'posted', request_id: id, url: record.url });
   if (name === 'jev_x_status') {
     const url = record.status === 'unknown' ? findPosted(state, record, x) : null;
     if (url) { record.status = 'posted'; record.url = url; writeFileSync(file, JSON.stringify(record)); }
-    return textResult({ status: record.status, request_id: id, url: record.url || null, message: record.status === 'unknown' ? 'Do not retry publishing; inspect existing posts first.' : undefined });
+    return textResult({ status: record.status, request_id: id, url: record.url || null, ...(x.persistDraft && ['preparing','prepared'].includes(record.status) ? {draft:record.draft,needs_prepare:record.browserInstance!==x.instance}:{}), message: record.status === 'unknown' ? 'Do not retry publishing; inspect existing posts first.' : undefined });
   }
   if (name !== 'jev_x_publish') throw new Error('Unknown X tool');
+  if(x.persistDraft && record.browserInstance!==x.instance && record.status==='prepared') throw new Error('Browser restarted; inspect and prepare the same draft before publishing');
   if (record.status !== 'prepared') return textResult({ status: record.status, request_id: id, message: 'Not publishing again. Inspect existing posts.' });
   if (state.url !== record.composeUrl || hash(state.editor || '') !== record.textHash || state.images !== record.imageCount || !state.submit || state.submit.disabled || state.submit.testId !== record.submit) throw new Error('Draft changed; nothing was published');
   if (record.targetId && (!contextSignal(state,record) || hash(contextSignal(state,record)) !== record.contextHash)) throw new Error('Reply/quote context changed');
@@ -226,9 +250,9 @@ export async function handleXPublicTool(name, args, callTool, config, env, { wai
   record.beforeLinks = [...new Set([...record.beforeLinks, ...state.links.filter(url => ownPost(url, x.account))])];
   writeFileSync(file, JSON.stringify(record));
   try {
-    text(await callTool('codex_click', { tab_id: tabId, selector: `[data-testid="${record.submit}"]` }));
+    await browser.click({ tab_id: tabId, selector: `[data-testid="${record.submit}"]` });
     for (let i = 0; i < 20; i++) {
-      const current = await observe(callTool, tabId, x);
+      const current = await observe(browser, tabId, x);
       const url = findPosted(current, record, x);
       if (url) {
         record.status = 'posted'; record.url = url;
@@ -248,17 +272,17 @@ export const X_PROFILE_EXPRESSION=`(() => {
  const fields={}; for(const [key,name] of Object.entries({name:'displayName',bio:'description',location:'location',website:'url'})) {const el=scope.querySelector('[name="'+name+'"]');if(el) fields[key]=el.value;}
  return {open:!!save,fields,images:Array.from(scope.querySelectorAll('img')).map(e=>e.src),buttons:Array.from(scope.querySelectorAll('button')).map(e=>e.innerText)};
 })()`;
-async function handleProfile(args,callTool,x,state,waitFor,wait){
+async function handleProfile(args,browser,x,state,waitFor,wait){
  if(x.profileEditing!==true) throw new Error('Public profile editing is not configured');
  const tab_id=args.tab_id;
- const read=async()=>{const raw=JSON.parse(text(await callTool('codex_evaluate',{tab_id,expression:X_PROFILE_EXPRESSION})));return raw.result?.value ?? raw.value ?? raw;};
- const snapshot=async status=>{const p=await read();return {content:[{type:'text',text:JSON.stringify({status,...p,revision:hash(JSON.stringify(p)),message:'You choose the public profile. Inspect before save; no per-edit orange confirmation.'})},...(await callTool('codex_dom_snapshot',{tab_id})).content,...(args.image ? (await callTool('codex_screenshot',{tab_id,format:'jpeg',quality:75})).content : [])]};};
+ const read=async()=>{return browser.evaluate({tab_id,expression:X_PROFILE_EXPRESSION});};
+ const snapshot=async status=>{const p=await read();return {content:[{type:'text',text:JSON.stringify({status,...p,revision:hash(JSON.stringify(p)),message:'You choose the public profile. Inspect before save; no per-edit orange confirmation.'})},...(await browser.snapshot({tab_id})).content,...(args.image ? (await browser.screenshot({tab_id,format:'jpeg',quality:75})).content : [])]};};
  if(args.action==='open'){
   if(state.editor?.trim()) throw new Error('Preserve the existing post draft; use another X tab for profile editing');
-  text(await callTool('codex_bring_to_front',{tab_id}));
-  if(new URL(state.url).pathname!=='/settings/profile') text(await callTool('codex_navigate',{tab_id,url:'https://x.com/settings/profile'}));
+  await browser.activate({tab_id});
+  if(new URL(state.url).pathname!=='/settings/profile') await browser.navigate({tab_id,url:'https://x.com/settings/profile'});
   await waitFor('[data-testid="Profile_Save_Button"]');
-  await observe(callTool,tab_id,x);
+  await observe(browser,tab_id,x);
   return snapshot('editing');
  }
  if(new URL(state.url).pathname!=='/settings/profile') throw new Error('Open your profile editor first');
@@ -271,7 +295,7 @@ async function handleProfile(args,callTool,x,state,waitFor,wait){
    if(!spec || typeof value!=='string' || [...value].length>spec[1] || (key==='name' && !value.trim())) throw new Error('Invalid public profile field');
    if(key==='website' && value && !/^https?:\/\//i.test(value)) throw new Error('Website must be an http(s) URL');
   }
-  for(const [key,value] of Object.entries(args.fields)) text(await callTool('codex_fill',{tab_id,selector:PROFILE_FIELDS[key][0],value}));
+  for(const [key,value] of Object.entries(args.fields)) await browser.fill({tab_id,selector:PROFILE_FIELDS[key][0],value});
   const after=await read(); if(Object.entries(args.fields).some(([k,v])=>after.fields[k]!==v)) throw new Error('Profile fields did not match; nothing was saved');
   return snapshot('editing');
  }
@@ -281,19 +305,19 @@ async function handleProfile(args,callTool,x,state,waitFor,wait){
   if(extname(image.path).toLowerCase()==='.gif') throw new Error('Profile images accept PNG, JPEG or WebP');
   const labels=args.target==='avatar'?['プロフィール画像を追加','Add profile photo']:['バナー画像を追加','Add banner photo'];
   const selector=labels.map(label=>`div:has(> button[aria-label="${label}"]) > input[type="file"]`).join(', ');
-  text(await callTool('codex_file_input',{tab_id,selector,files:[image.path]}));
+  await browser.files({tab_id,selector,files:[image.path]});
   return snapshot('inspect_crop');
  }
  if(args.action==='apply_image'){
-  const raw=JSON.parse(text(await callTool('codex_dom_snapshot',{tab_id})));
+  const raw=await browser.snapshot({tab_id});
   const nodes=(raw.nodes||[]).filter(n=>['適用','Apply'].includes(n.name?.value) && n.role?.value==='button' && Number.isInteger(n.backendDOMNodeId));
   if(nodes.length!==1) throw new Error('Image crop Apply button is not unambiguous; inspect the screenshot');
-  text(await callTool('codex_dom_click',{tab_id,node_id:String(nodes[0].backendDOMNodeId)}));
+  await browser.clickNode({tab_id,node_id:String(nodes[0].backendDOMNodeId)});
   return snapshot('editing');
  }
  if(args.action!=='save') throw new Error('Unknown public profile action');
  if(typeof args.revision!=='string' || args.revision!==hash(JSON.stringify(before))) throw new Error('Profile changed; inspect the current revision before saving');
- text(await callTool('codex_click',{tab_id,selector:'[data-testid="Profile_Save_Button"]'}));
+ await browser.click({tab_id,selector:'[data-testid="Profile_Save_Button"]'});
  for(let i=0;i<20;i++){if(!(await read()).open) return textResult({status:'saved',account:x.account,fields:before.fields,message:'Save dialog closed. Inspect your public profile to confirm text and images.'});await wait(500);}
  return textResult({status:'unknown',message:'Save was attempted. Inspect your public profile before trying again.'});
 }

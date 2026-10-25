@@ -212,6 +212,27 @@ function filterUserTabs(result,policy) {
   });
 }
 
+export function browserRunOptions(args,config,env=process.env) {
+  const {actor,policy:actorPolicy}=enforceActor(config,env);
+  const goal=assertString(args?.goal,'goal');
+  const allowedOrigins=enforceOrigins(args?.allowed_origins,actorPolicy);
+  const controls=args.controls ?? [];
+  if (!Array.isArray(controls) || controls.some(control =>
+    !control || !['click','navigate','scroll','reload','press'].includes(control.op) ||
+    (control.op === 'navigate' && typeof control.url !== 'string') ||
+    (control.op === 'click' && (
+      (control.aliases !== undefined && (!Array.isArray(control.aliases) || control.aliases.some(alias=>typeof alias !== 'string'))) ||
+      [control.name,...(control.aliases ?? [])].some(label=>CONSEQUENTIAL.test(label ?? ''))
+    )) ||
+    (control.op === 'press' && !WRAPPER_KEYS.has(control.key)))) throw new Error('Unsafe Claude browser control');
+  assertNavigationOrigins(controls,allowedOrigins);
+  const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
+  const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
+  const maxSteps=args.max_steps ?? actorPolicy.maxSteps ?? 10;
+  if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > (actorPolicy.maxSteps ?? 30)) throw new Error('Browser max_steps is not authorized by host');
+  return {actor,goal,controls,policy,defaults:{...config,allowedOrigins,maxSteps,minConfidence:args.min_confidence ?? 0.55}};
+}
+
 export async function handleJevTool(name,args,callTool,config=undefined,env=process.env,{spawnProcess=spawn}={}) {
   if (config === undefined) {
     const configPath=env[BROWSER_CONFIG_ENV];
@@ -238,23 +259,8 @@ export async function handleJevTool(name,args,callTool,config=undefined,env=proc
   }
   if (name !== 'jev_browser_run') throw new Error('Unknown Jev browser tool');
   const tabId=assertString(args?.tab_id,'tab_id');
-  const goal=assertString(args?.goal,'goal');
-  const allowedOrigins=enforceOrigins(args?.allowed_origins,actorPolicy);
-  const controls=args.controls ?? [];
-  if (!Array.isArray(controls) || controls.some(control =>
-    !control || !['click','navigate','scroll','reload','press'].includes(control.op) ||
-    (control.op === 'navigate' && typeof control.url !== 'string') ||
-    (control.op === 'click' && (
-      (control.aliases !== undefined && (!Array.isArray(control.aliases) || control.aliases.some(alias=>typeof alias !== 'string'))) ||
-      [control.name,...(control.aliases ?? [])].some(label=>CONSEQUENTIAL.test(label ?? ''))
-    )) ||
-    (control.op === 'press' && !WRAPPER_KEYS.has(control.key)))) throw new Error('Unsafe Claude browser control');
-  assertNavigationOrigins(controls,allowedOrigins);
-  const requestedPolicy=args.policy ?? {click:true,scrollDirections:['down','up']};
-  const policy={...requestedPolicy,keys:(requestedPolicy.keys ?? []).filter(key=>WRAPPER_KEYS.has(key)),requireCodexNames:[...(requestedPolicy.requireCodexNames ?? []),CONSEQUENTIAL]};
-  const maxSteps=args.max_steps ?? actorPolicy.maxSteps ?? 10;
-  if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > (actorPolicy.maxSteps ?? 30)) throw new Error('Browser max_steps is not authorized by host');
-  const session=createClaudeCodeSession({tabId,callTool},{...config,allowedOrigins,maxSteps,minConfidence:args.min_confidence ?? 0.55});
+  const {goal,controls,policy,defaults}=browserRunOptions(args,config,env);
+  const session=createClaudeCodeSession({tabId,callTool},defaults);
   try {
     return {...await session.run({goal,controls,policy}),actor};
   } finally {
