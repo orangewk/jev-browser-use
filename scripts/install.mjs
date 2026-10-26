@@ -7,7 +7,7 @@ import { createInterface } from 'node:readline/promises';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const models = { typesafe: 'jev-latest', openrouter: '~typesafe/jev-latest' };
-const runtimeFiles = ['SKILL.md', 'bridge.mjs', 'claude-adapter.mjs', 'playwright-adapter.mjs', 'claude-mcp-server.mjs', 'x-public.mjs', 'start-windows-profile.mjs', 'references'];
+const runtimeFiles = ['SKILL.md', 'bridge.mjs', 'claude-adapter.mjs', 'playwright-adapter.mjs', 'claude-mcp-server.mjs', 'x-public.mjs', 'receive-image.mjs', 'start-windows-profile.mjs', 'references'];
 
 async function exists(path) {
   try { await stat(path); return true; } catch (error) {
