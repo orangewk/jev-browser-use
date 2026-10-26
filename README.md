@@ -1,5 +1,7 @@
 # Jev Browser Use
 
+The optional `receive-image.mjs` helper stores one anonymous public HTTP(S) image in a configured room's `received/` directory. It accepts PNG, JPEG, GIF and WebP up to 10,000,000 bytes, preserves original bytes without overwriting, and records source URLs without query strings. It does not open a browser, use cookies, follow redirects or publish anything. Run `node test/receive-image.test.mjs` for synthetic checks; no external requests are needed.
+
 **Jev clicks. Codex or Claude Code thinks and verifies.**
 
 A browser Skill powered by [TypeSafe’s Jev](https://docs.typesafe.ai/introduction). Hand off navigation, clicks, toggles, and scrolling; keep the host agent in charge of text input, visual judgment, and the final check.
