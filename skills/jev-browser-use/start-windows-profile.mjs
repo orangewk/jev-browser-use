@@ -28,11 +28,17 @@ export function profileDirectory(env=process.env) {
   return env.JEV_BROWSER_PROFILE_DIR || join(env.LOCALAPPDATA || join(homedir(),'AppData','Local'),'JevBrowser','User Data');
 }
 
-export async function startProfile({env=process.env,url='https://x.com/'}={}) {
-  const chrome=await findChrome(env);
-  const profile=profileDirectory(env);
+export async function startProfile({env=process.env,url='https://x.com/',spawnProcess=spawn,chrome,profile}={}) {
+  chrome ??= await findChrome(env);
+  profile ??= profileDirectory(env);
   await mkdir(profile,{recursive:true});
-  const child=spawn(chrome,[`--user-data-dir=${profile}`,'--profile-directory=Default','--no-default-browser-check',url],{detached:true,stdio:'ignore'});
+  const child=spawnProcess(chrome,[`--user-data-dir=${profile}`,'--profile-directory=Default','--no-default-browser-check',url],{detached:true,stdio:'ignore'});
+  await new Promise((resolve,reject) => {
+    const onError=error => { child.removeListener('spawn',onSpawn); reject(error); };
+    const onSpawn=() => { child.removeListener('error',onError); resolve(); };
+    child.once('error',onError);
+    child.once('spawn',onSpawn);
+  });
   child.unref();
   return {chrome,profile,pid:child.pid};
 }
